@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== Base resets & globals ===== */
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body, #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply m-0 overflow-hidden bg-pm-bg text-pm-text font-sans text-[13px] leading-normal;
+  }
+
+  button { @apply border-none bg-transparent cursor-pointer; }
+  button, input, select, textarea { @apply font-[inherit] text-inherit; }
+  textarea { @apply resize-y; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { @apply w-1.5 h-1.5; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-neutral-600 rounded-sm; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-neutral-500; }
+}
+
+/* ===== Reusable component-level styles ===== */
+@layer components {
+  /* Base input styling used across inputs/selects/textareas */
+  .pm-input {
+    @apply w-full bg-pm-bg-input border border-pm-border text-pm-text px-2.5 py-1.5 rounded outline-none;
+  }
+  .pm-input:focus {
+    @apply border-pm-orange ring-1 ring-pm-orange;
+  }
+
+  /* Rail item active indicator (pseudo-element) */
+  .rail-active-indicator {
+    @apply relative text-pm-text bg-pm-active;
+  }
+  .rail-active-indicator::before {
+    content: '';
+    @apply absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-pm-orange rounded-r-sm;
+  }
+
+  /* Workspace tab active underline */
+  .tab-active-line {
+    @apply relative text-pm-text bg-pm-bg;
+  }
+  .tab-active-line::after {
+    content: '';
+    @apply absolute bottom-0 left-0 right-0 h-0.5 bg-pm-orange;
+  }
+
+  /* Section tab active underline */
+  .section-tab-active {
+    @apply text-pm-text border-b-2 border-pm-orange;
+  }
+}
