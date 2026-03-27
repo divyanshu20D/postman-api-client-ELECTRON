@@ -1,3 +1,5 @@
+import { dialog } from 'electron';
+import path from 'node:path';
 import type { IpcMain } from 'electron';
 import { getAppBootstrap } from '../modules/collections/bootstrap-service';
 import { listCollections } from '../modules/collections/collection-service';
@@ -11,11 +13,13 @@ import {
   updateEnvironment,
 } from '../modules/environments/environment-service';
 import { clearHistory, listHistory } from '../modules/history/history-service';
-import { executeRequest } from '../modules/requests/request-executor';
+import { cancelRequestExecution, executeRequest } from '../modules/requests/request-executor';
 import { listRequests, saveRequestDraft } from '../modules/requests/request-service';
 import {
+  cancelRequestExecutionSchema,
   createEnvironmentSchema,
   executeRequestSchema,
+  pickFilesInputSchema,
   saveRequestDraftSchema,
   saveVariableSchema,
   updateEnvironmentSchema,
@@ -33,10 +37,31 @@ export function registerAppIpc(ipcMain: IpcMain) {
   ipcMain.handle('requests:save-draft', async (_event, input: unknown) => {
     return saveRequestDraft(saveRequestDraftSchema.parse(input));
   });
+  ipcMain.handle('dialog:pick-files', async (_event, input: unknown) => {
+    const { multiple } = pickFilesInputSchema.parse(input ?? {});
+    const result = await dialog.showOpenDialog({
+      properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+    });
+
+    if (result.canceled) {
+      return [];
+    }
+
+    return result.filePaths.map((filePath) => ({
+      path: filePath,
+      name: path.basename(filePath),
+      size: 0,
+      mimeType: null,
+    }));
+  });
 
   // Execute
   ipcMain.handle('requests:execute', async (_event, input: unknown) => {
     return executeRequest(executeRequestSchema.parse(input));
+  });
+  ipcMain.handle('requests:cancel-execution', async (_event, input: unknown) => {
+    const { executionId } = cancelRequestExecutionSchema.parse(input);
+    return cancelRequestExecution(executionId);
   });
 
   // History

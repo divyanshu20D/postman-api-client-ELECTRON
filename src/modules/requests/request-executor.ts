@@ -1,13 +1,19 @@
+import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { db } from '../../db/connection';
 import { historyEntries } from '../../db/schema';
 import type { ExecuteRequestInput } from '../../shared/ipc';
-import type { ExecutionResult } from '../../shared/models';
+import type { BinaryBodyConfig, ExecutionResult, FormDataRow, KeyValueRow, RequestBodyType } from '../../shared/models';
 
-interface HeaderRow {
-  key: string;
-  value: string;
-  enabled: boolean;
+type HeaderRow = KeyValueRow;
+
+const activeExecutions = new Map<string, AbortController>();
+
+class RequestCancelledError extends Error {
+  constructor() {
+    super('Request cancelled');
+    this.name = 'RequestCancelledError';
+  }
 }
 
 /**
@@ -15,6 +21,9 @@ interface HeaderRow {
  * Saves a history entry with request snapshot and response data.
  */
 export async function executeRequest(input: ExecuteRequestInput): Promise<ExecutionResult> {
+  const controller = new AbortController();
+  activeExecutions.set(input.executionId, controller);
+
   // Build headers
   const headerRows = parseJson<HeaderRow[]>(input.headers, []);
   const headers = new Headers();
@@ -67,17 +76,18 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
   const fetchOptions: RequestInit = {
     method: input.method,
     headers,
+    signal: controller.signal,
   };
-
-  if (input.body && !['GET', 'HEAD'].includes(input.method)) {
-    fetchOptions.body = input.body;
-  }
 
   // Execute
   const startTime = performance.now();
   let result: ExecutionResult;
 
   try {
+    if (!['GET', 'HEAD'].includes(input.method)) {
+      await applyRequestBody(fetchOptions, headers, input);
+    }
+
     const response = await fetch(finalUrl, fetchOptions);
     const bodyText = await response.text();
     const durationMs = Math.round(performance.now() - startTime);
@@ -96,6 +106,10 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
       sizeBytes: new TextEncoder().encode(bodyText).length,
     };
   } catch (err) {
+    if (isAbortError(err)) {
+      throw new RequestCancelledError();
+    }
+
     const durationMs = Math.round(performance.now() - startTime);
     const message = err instanceof Error ? err.message : String(err);
 
@@ -107,6 +121,8 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
       durationMs,
       sizeBytes: 0,
     };
+  } finally {
+    activeExecutions.delete(input.executionId);
   }
 
   // Save history entry
@@ -122,7 +138,9 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
         url: input.url,
         queryParams: input.queryParams,
         headers: input.headers,
+        bodyType: input.bodyType,
         body: input.body,
+        bodyMeta: input.bodyMeta,
         authType: input.authType,
         authConfig: input.authConfig,
       }),
@@ -143,10 +161,104 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
   return result;
 }
 
+export function cancelRequestExecution(executionId: string): boolean {
+  const controller = activeExecutions.get(executionId);
+  if (!controller) {
+    return false;
+  }
+
+  controller.abort();
+  return true;
+}
+
 function parseJson<T>(value: string, fallback: T): T {
   try {
     return JSON.parse(value) as T;
   } catch {
     return fallback;
   }
+}
+
+function normalizeBodyType(bodyType: RequestBodyType | null | undefined, body: string | null | undefined): RequestBodyType {
+  if (bodyType) {
+    return bodyType;
+  }
+
+  return body ? 'raw' : 'none';
+}
+
+async function applyRequestBody(fetchOptions: RequestInit, headers: Headers, input: ExecuteRequestInput) {
+  const bodyType = normalizeBodyType(input.bodyType, input.body);
+
+  switch (bodyType) {
+    case 'none':
+      return;
+    case 'raw':
+      if (input.body) {
+        fetchOptions.body = input.body;
+      }
+      return;
+    case 'x-www-form-urlencoded': {
+      const bodyRows = parseJson<KeyValueRow[]>(input.bodyMeta ?? '[]', []);
+      const searchParams = new URLSearchParams();
+
+      for (const row of bodyRows) {
+        if (row.enabled && row.key) {
+          searchParams.append(row.key, row.value);
+        }
+      }
+
+      fetchOptions.body = searchParams.toString();
+      if (!headers.has('content-type')) {
+        headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8');
+      }
+      return;
+    }
+    case 'form-data': {
+      const rows = parseJson<FormDataRow[]>(input.bodyMeta ?? '[]', []);
+      const formData = new FormData();
+
+      for (const row of rows) {
+        if (!row.enabled || !row.key) {
+          continue;
+        }
+
+        if (row.kind === 'file') {
+          if (!row.filePath) {
+            continue;
+          }
+
+          const fileBuffer = await readFile(row.filePath);
+          const fileBlob = new Blob([fileBuffer], {
+            type: row.contentType ?? 'application/octet-stream',
+          });
+          formData.append(row.key, fileBlob, row.fileName ?? 'upload.bin');
+          continue;
+        }
+
+        formData.append(row.key, row.value);
+      }
+
+      headers.delete('content-type');
+      fetchOptions.body = formData;
+      return;
+    }
+    case 'binary': {
+      const config = parseJson<BinaryBodyConfig | null>(input.bodyMeta ?? 'null', null);
+      if (!config?.filePath) {
+        return;
+      }
+
+      const fileBuffer = await readFile(config.filePath);
+      fetchOptions.body = new Uint8Array(fileBuffer);
+      if (config.contentType && !headers.has('content-type')) {
+        headers.set('content-type', config.contentType);
+      }
+      return;
+    }
+  }
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError';
 }

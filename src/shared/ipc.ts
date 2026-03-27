@@ -1,10 +1,15 @@
 import { z } from 'zod';
 import type {
+  BinaryBodyConfig,
   CollectionRecord,
   EnvironmentRecord,
   ExecutionResult,
+  FormDataRow,
   HistoryEntryRecord,
   HttpMethod,
+  KeyValueRow,
+  PickedFile,
+  RequestBodyType,
   RequestRecord,
   VariableRecord,
   WorkspaceRecord,
@@ -18,6 +23,9 @@ export interface AppBootstrap {
   history: HistoryEntryRecord[];
 }
 
+const requestBodyTypeSchema = z.enum(['none', 'raw', 'form-data', 'x-www-form-urlencoded', 'binary']);
+const executionIdSchema = z.string().uuid();
+
 export const saveRequestDraftSchema = z.object({
   id: z.string().uuid().optional(),
   workspaceId: z.string().uuid(),
@@ -25,10 +33,12 @@ export const saveRequestDraftSchema = z.object({
   folderId: z.string().uuid().nullable().optional(),
   name: z.string().min(1).max(120),
   method: z.custom<HttpMethod>(),
-  url: z.string().min(1),
+  url: z.string(),
   queryParams: z.string().default('[]'),
   headers: z.string().default('[]'),
+  bodyType: requestBodyTypeSchema.nullable().optional(),
   body: z.string().nullable().optional(),
+  bodyMeta: z.string().nullable().optional(),
   authType: z.string().nullable().optional(),
   authConfig: z.string().nullable().optional(),
 });
@@ -65,6 +75,7 @@ export type SaveVariableInput = z.infer<typeof saveVariableSchema>;
 /* ===== Execute request ===== */
 
 export const executeRequestSchema = z.object({
+  executionId: executionIdSchema,
   workspaceId: z.string().uuid(),
   requestId: z.string().uuid().nullable().optional(),
   name: z.string(),
@@ -72,12 +83,26 @@ export const executeRequestSchema = z.object({
   url: z.string().min(1),
   queryParams: z.string().default('[]'),
   headers: z.string().default('[]'),
+  bodyType: requestBodyTypeSchema.nullable().optional(),
   body: z.string().nullable().optional(),
+  bodyMeta: z.string().nullable().optional(),
   authType: z.string().nullable().optional(),
   authConfig: z.string().nullable().optional(),
 });
 
 export type ExecuteRequestInput = z.infer<typeof executeRequestSchema>;
+
+export const cancelRequestExecutionSchema = z.object({
+  executionId: executionIdSchema,
+});
+
+export type CancelRequestExecutionInput = z.infer<typeof cancelRequestExecutionSchema>;
+
+export const pickFilesInputSchema = z.object({
+  multiple: z.boolean().default(false),
+});
+
+export type PickFilesInput = z.infer<typeof pickFilesInputSchema>;
 
 /* ===== History inputs ===== */
 
@@ -92,9 +117,11 @@ export interface AppApi {
   listCollections(): Promise<CollectionRecord[]>;
   listRequests(): Promise<RequestRecord[]>;
   saveRequestDraft(input: SaveRequestDraftInput): Promise<RequestRecord>;
+  pickFiles(input?: PickFilesInput): Promise<PickedFile[]>;
 
   // Execute
   executeRequest(input: ExecuteRequestInput): Promise<ExecutionResult>;
+  cancelRequestExecution(executionId: string): Promise<boolean>;
 
   // History
   listHistory(): Promise<HistoryEntryRecord[]>;

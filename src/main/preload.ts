@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppApi, AppBootstrap, CreateEnvironmentInput, ExecuteRequestInput, SaveRequestDraftInput, SaveVariableInput, UpdateEnvironmentInput } from '../shared/ipc';
+import type {
+  AppApi,
+  AppBootstrap,
+  CancelRequestExecutionInput,
+  CreateEnvironmentInput,
+  ExecuteRequestInput,
+  PickFilesInput,
+  SaveRequestDraftInput,
+  SaveVariableInput,
+  UpdateEnvironmentInput,
+} from '../shared/ipc';
 
 const api: AppApi = {
   getBootstrap: () => ipcRenderer.invoke('app:get-bootstrap') as Promise<AppBootstrap>,
@@ -7,10 +17,14 @@ const api: AppApi = {
   listRequests: () => ipcRenderer.invoke('requests:list') as ReturnType<AppApi['listRequests']>,
   saveRequestDraft: (input: SaveRequestDraftInput) =>
     ipcRenderer.invoke('requests:save-draft', input) as ReturnType<AppApi['saveRequestDraft']>,
+  pickFiles: (input?: PickFilesInput) =>
+    ipcRenderer.invoke('dialog:pick-files', input ?? {}) as ReturnType<AppApi['pickFiles']>,
 
   // Execute
   executeRequest: (input: ExecuteRequestInput) =>
     ipcRenderer.invoke('requests:execute', input) as ReturnType<AppApi['executeRequest']>,
+  cancelRequestExecution: (executionId: string) =>
+    ipcRenderer.invoke('requests:cancel-execution', { executionId } satisfies CancelRequestExecutionInput) as ReturnType<AppApi['cancelRequestExecution']>,
 
   // History
   listHistory: () => ipcRenderer.invoke('history:list') as ReturnType<AppApi['listHistory']>,

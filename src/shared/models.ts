@@ -7,6 +7,34 @@ export type HttpMethod =
   | 'HEAD'
   | 'OPTIONS';
 
+export type RequestBodyType = 'none' | 'raw' | 'form-data' | 'x-www-form-urlencoded' | 'binary';
+
+export interface KeyValueRow {
+  key: string;
+  value: string;
+  enabled: boolean;
+}
+
+export interface FormDataRow extends KeyValueRow {
+  kind: 'text' | 'file';
+  filePath: string | null;
+  fileName: string | null;
+  contentType: string | null;
+}
+
+export interface BinaryBodyConfig {
+  filePath: string | null;
+  fileName: string | null;
+  contentType: string | null;
+}
+
+export interface PickedFile {
+  path: string;
+  name: string;
+  size: number;
+  mimeType: string | null;
+}
+
 export interface WorkspaceRecord {
   id: string;
   name: string;
@@ -35,7 +63,9 @@ export interface RequestRecord {
   url: string;
   queryParams: string;
   headers: string;
+  bodyType: RequestBodyType | null;
   body: string | null;
+  bodyMeta: string | null;
   authType: string | null;
   authConfig: string | null;
   createdAt: string;

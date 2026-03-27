@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppBootstrap, SaveRequestDraftInput } from '@shared/ipc';
-import type { ExecutionResult, HistoryEntryRecord, HttpMethod, RequestRecord } from '@shared/models';
+import type { ExecutionResult, HistoryEntryRecord, HttpMethod, RequestBodyType, RequestRecord } from '@shared/models';
 import { EnvironmentsPanel } from './components/EnvironmentsPanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { ImportCurlModal } from './components/ImportCurlModal';
@@ -12,20 +12,15 @@ import { METHOD_COLOR } from './utils/method-colors';
 
 type RailTab = 'collections' | 'environments' | 'history';
 
-/* ===== Tab model ===== */
-
 interface RequestTab {
   tabId: string;
   draft: SaveRequestDraftInput;
   savedRequestId: string | null;
   isDirty: boolean;
-  /** Response from last execution */
   response: ExecutionResult | null;
-  /** Whether a request is in-flight */
   loading: boolean;
-  /** Error message if execution failed */
+  currentExecutionId: string | null;
   error: string | null;
-  /** Console log lines */
   consoleLogs: string[];
 }
 
@@ -44,7 +39,9 @@ function createDraft(workspaceId: string, name?: string): SaveRequestDraftInput 
     url: '',
     queryParams: '[]',
     headers: '[]',
+    bodyType: 'none',
     body: null,
+    bodyMeta: null,
     authType: null,
     authConfig: null,
   };
@@ -58,6 +55,7 @@ function createTab(draft: SaveRequestDraftInput, savedRequestId: string | null =
     isDirty: !savedRequestId,
     response: null,
     loading: false,
+    currentExecutionId: null,
     error: null,
     consoleLogs: [],
   };
@@ -71,13 +69,12 @@ export function App() {
   const [activeRail, setActiveRail] = useState<RailTab>('collections');
   const [showCurlModal, setShowCurlModal] = useState(false);
 
-  const activeTab = tabs.find((t) => t.tabId === activeTabId) ?? null;
+  const activeTab = tabs.find((tab) => tab.tabId === activeTabId) ?? null;
   const draft = activeTab?.draft ?? null;
 
   useEffect(() => {
     void window.appApi.getBootstrap().then((data) => {
       setBootstrap(data);
-      // Open the first saved request as a tab, or create an empty one
       const initial = data.requests[0];
       const tab = initial
         ? createTab(requestToDraft(initial), initial.id)
@@ -93,14 +90,16 @@ export function App() {
     setBootstrap(data);
   }
 
-  /* ===== Tab helpers ===== */
-
   function updateActiveTab(updater: (tab: RequestTab) => RequestTab) {
-    setTabs((prev) => prev.map((t) => (t.tabId === activeTabId ? updater(t) : t)));
+    setTabs((prev) => prev.map((tab) => (tab.tabId === activeTabId ? updater(tab) : tab)));
+  }
+
+  function updateTabById(tabId: string, updater: (tab: RequestTab) => RequestTab) {
+    setTabs((prev) => prev.map((tab) => (tab.tabId === tabId ? updater(tab) : tab)));
   }
 
   function handleDraftChange(newDraft: SaveRequestDraftInput) {
-    updateActiveTab((t) => ({ ...t, draft: newDraft, isDirty: true }));
+    updateActiveTab((tab) => ({ ...tab, draft: newDraft, isDirty: true }));
   }
 
   function addTab(tab: RequestTab) {
@@ -110,24 +109,22 @@ export function App() {
 
   function closeTab(tabId: string) {
     setTabs((prev) => {
-      const next = prev.filter((t) => t.tabId !== tabId);
+      const next = prev.filter((tab) => tab.tabId !== tabId);
       if (next.length === 0 && bootstrap) {
-        // Always keep at least one tab
         const empty = createTab(createDraft(bootstrap.workspace.id));
         setActiveTabId(empty.tabId);
         return [empty];
       }
-      // If closing the active tab, switch to the nearest one
+
       if (tabId === activeTabId) {
-        const closedIndex = prev.findIndex((t) => t.tabId === tabId);
+        const closedIndex = prev.findIndex((tab) => tab.tabId === tabId);
         const newActive = next[Math.min(closedIndex, next.length - 1)];
         setActiveTabId(newActive.tabId);
       }
+
       return next;
     });
   }
-
-  /* ===== Actions ===== */
 
   async function handleSave() {
     if (!draft || !bootstrap || !activeTab) return;
@@ -135,22 +132,131 @@ export function App() {
     const saved = await window.appApi.saveRequestDraft(draft);
     const requests = await window.appApi.listRequests();
     setBootstrap({ ...bootstrap, requests });
-    // Update the tab with the saved ID
     setTabs((prev) =>
-      prev.map((t) =>
-        t.tabId === activeTabId
-          ? { ...t, tabId: saved.id, draft: requestToDraft(saved), savedRequestId: saved.id, isDirty: false }
-          : t,
+      prev.map((tab) =>
+        tab.tabId === activeTabId
+          ? { ...tab, tabId: saved.id, draft: requestToDraft(saved), savedRequestId: saved.id, isDirty: false }
+          : tab,
       ),
     );
     setActiveTabId(saved.id);
     setStatus('Saved');
   }
 
+  async function handleSend() {
+    if (!draft || !activeTab) return;
+
+    if (activeTab.loading) {
+      if (!activeTab.currentExecutionId) return;
+      setStatus('Cancelling...');
+      await window.appApi.cancelRequestExecution(activeTab.currentExecutionId);
+      return;
+    }
+
+    if (!draft.url.trim()) {
+      setStatus('Enter a URL first');
+      return;
+    }
+
+    const originTabId = activeTab.tabId;
+    const executionId = crypto.randomUUID();
+    const time = new Date().toLocaleTimeString();
+
+    updateTabById(originTabId, (tab) => ({
+      ...tab,
+      loading: true,
+      currentExecutionId: executionId,
+      error: null,
+      consoleLogs: [
+        ...tab.consoleLogs,
+        `[${time}] ${draft.method} ${draft.url}`,
+        `[${time}] Sending request...`,
+      ],
+    }));
+    setStatus('Sending...');
+
+    try {
+      const result = await window.appApi.executeRequest({
+        executionId,
+        workspaceId: draft.workspaceId,
+        requestId: activeTab.savedRequestId ?? undefined,
+        name: draft.name,
+        method: draft.method,
+        url: draft.url,
+        queryParams: draft.queryParams,
+        headers: draft.headers,
+        bodyType: draft.bodyType,
+        body: draft.body,
+        bodyMeta: draft.bodyMeta,
+        authType: draft.authType,
+        authConfig: draft.authConfig,
+      });
+
+      const doneTime = new Date().toLocaleTimeString();
+      updateTabById(originTabId, (tab) =>
+        tab.currentExecutionId !== executionId
+          ? tab
+          : {
+              ...tab,
+              loading: false,
+              currentExecutionId: null,
+              response: result,
+              consoleLogs: [
+                ...tab.consoleLogs,
+                `[${doneTime}] ${result.statusCode} ${result.statusText} - ${result.durationMs}ms`,
+              ],
+            },
+      );
+
+      void refreshBootstrap();
+      setStatus(`${result.statusCode} ${result.statusText} - ${result.durationMs}ms`);
+    } catch (err) {
+      const errTime = new Date().toLocaleTimeString();
+      const message = err instanceof Error ? err.message : String(err);
+      const wasCancelled = message === 'Request cancelled';
+
+      updateTabById(originTabId, (tab) =>
+        tab.currentExecutionId !== executionId
+          ? tab
+          : {
+              ...tab,
+              loading: false,
+              currentExecutionId: null,
+              error: message,
+              consoleLogs: [
+                ...tab.consoleLogs,
+                wasCancelled ? `[${errTime}] CANCELLED` : `[${errTime}] ERROR: ${message}`,
+              ],
+            },
+      );
+      setStatus(wasCancelled ? 'Request cancelled' : 'Request failed');
+    }
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (!event.repeat) {
+          void handleSave();
+        }
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        if (!event.repeat) {
+          void handleSend();
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleSave, handleSend]);
+
   async function handleNewRequest(name?: string) {
     if (!bootstrap) return;
     const newDraft = createDraft(bootstrap.workspace.id, name);
-    // Auto-save to DB so it appears in the sidebar
     const saved = await window.appApi.saveRequestDraft(newDraft);
     const requests = await window.appApi.listRequests();
     setBootstrap({ ...bootstrap, requests });
@@ -169,11 +275,12 @@ export function App() {
       url: parsed.url,
       queryParams: '[]',
       headers: JSON.stringify(parsed.headers, null, 2),
+      bodyType: parsed.body ? 'raw' : 'none',
       body: parsed.body,
+      bodyMeta: null,
       authType: parsed.authType,
       authConfig: parsed.authConfig,
     };
-    // Auto-save to DB so it appears in the sidebar
     const saved = await window.appApi.saveRequestDraft(importedDraft);
     const requests = await window.appApi.listRequests();
     setBootstrap({ ...bootstrap, requests });
@@ -187,6 +294,7 @@ export function App() {
     if (!bootstrap) return;
 
     const request = bootstrap.requests.find((item) => item.id === requestId);
+    const openTab = tabs.find((tab) => tab.savedRequestId === requestId);
     const trimmedName = nextName.trim();
     if (!request || !trimmedName || trimmedName === request.name) {
       return;
@@ -194,19 +302,23 @@ export function App() {
 
     setStatus('Renaming request...');
 
+    const sourceDraft = openTab?.draft ?? requestToDraft(request);
+
     const saved = await window.appApi.saveRequestDraft({
       id: request.id,
-      workspaceId: request.workspaceId,
-      collectionId: request.collectionId,
-      folderId: request.folderId,
+      workspaceId: sourceDraft.workspaceId,
+      collectionId: sourceDraft.collectionId,
+      folderId: sourceDraft.folderId,
       name: trimmedName,
-      method: request.method,
-      url: request.url,
-      queryParams: request.queryParams,
-      headers: request.headers,
-      body: request.body,
-      authType: request.authType,
-      authConfig: request.authConfig,
+      method: sourceDraft.method,
+      url: sourceDraft.url,
+      queryParams: sourceDraft.queryParams,
+      headers: sourceDraft.headers,
+      bodyType: sourceDraft.bodyType,
+      body: sourceDraft.body,
+      bodyMeta: sourceDraft.bodyMeta,
+      authType: sourceDraft.authType,
+      authConfig: sourceDraft.authConfig,
     });
 
     const requests = await window.appApi.listRequests();
@@ -217,7 +329,8 @@ export function App() {
           ? {
               ...tab,
               tabId: saved.id,
-              draft: { ...tab.draft, name: saved.name },
+              draft: requestToDraft(saved),
+              savedRequestId: saved.id,
             }
           : tab,
       ),
@@ -225,80 +338,14 @@ export function App() {
     setStatus(`Renamed to ${saved.name}`);
   }
 
-  async function handleSend() {
-    if (!draft || !activeTab) return;
-
-    if (!draft.url.trim()) {
-      setStatus('Enter a URL first');
-      return;
-    }
-
-    const time = new Date().toLocaleTimeString();
-
-    // Mark loading
-    updateActiveTab((t) => ({
-      ...t,
-      loading: true,
-      error: null,
-      consoleLogs: [
-        ...t.consoleLogs,
-        `[${time}] ${draft.method} ${draft.url}`,
-        `[${time}] Sending request...`,
-      ],
-    }));
-    setStatus('Sending...');
-
-    try {
-      const result = await window.appApi.executeRequest({
-        workspaceId: draft.workspaceId,
-        requestId: activeTab.savedRequestId ?? undefined,
-        name: draft.name,
-        method: draft.method,
-        url: draft.url,
-        queryParams: draft.queryParams,
-        headers: draft.headers,
-        body: draft.body,
-        authType: draft.authType,
-        authConfig: draft.authConfig,
-      });
-
-      const doneTime = new Date().toLocaleTimeString();
-      updateActiveTab((t) => ({
-        ...t,
-        loading: false,
-        response: result,
-        consoleLogs: [
-          ...t.consoleLogs,
-          `[${doneTime}] ${result.statusCode} ${result.statusText} — ${result.durationMs}ms`,
-        ],
-      }));
-
-      // Refresh bootstrap to update history
-      void refreshBootstrap();
-
-      setStatus(`${result.statusCode} ${result.statusText} — ${result.durationMs}ms`);
-    } catch (err) {
-      const errTime = new Date().toLocaleTimeString();
-      const message = err instanceof Error ? err.message : String(err);
-      updateActiveTab((t) => ({
-        ...t,
-        loading: false,
-        error: message,
-        consoleLogs: [...t.consoleLogs, `[${errTime}] ERROR: ${message}`],
-      }));
-      setStatus('Request failed');
-    }
-  }
-
   function handleSelectRequest(request: RequestRecord) {
-    // If this request is already open in a tab, switch to it
-    const existing = tabs.find((t) => t.savedRequestId === request.id);
+    const existing = tabs.find((tab) => tab.savedRequestId === request.id);
     if (existing) {
       setActiveTabId(existing.tabId);
       setStatus(`Editing: ${request.name}`);
       return;
     }
-    // Otherwise open a new tab
+
     const tab = createTab(requestToDraft(request), request.id);
     addTab(tab);
     setStatus(`Editing: ${request.name}`);
@@ -315,7 +362,9 @@ export function App() {
         url: snap.url ?? '',
         queryParams: snap.queryParams ?? '[]',
         headers: snap.headers ?? '[]',
+        bodyType: normalizeBodyType(snap.bodyType ?? null, snap.body ?? null),
         body: snap.body ?? null,
+        bodyMeta: snap.bodyMeta ?? null,
         authType: snap.authType ?? null,
         authConfig: snap.authConfig ?? null,
       });
@@ -332,8 +381,6 @@ export function App() {
     setStatus('History cleared');
   }
 
-  /* ===== Render ===== */
-
   if (!bootstrap || tabs.length === 0 || !draft) {
     return (
       <div className="h-screen grid place-items-center bg-pm-bg text-pm-text-s">
@@ -347,7 +394,6 @@ export function App() {
 
   return (
     <div className="h-screen grid grid-rows-[48px_1fr] bg-pm-bg">
-      {/* ===== Top Bar ===== */}
       <header className="flex items-center gap-3 px-3 bg-pm-bg-topbar border-b border-pm-border-s z-50 [-webkit-app-region:drag]">
         <div className="flex items-center gap-0.5 [-webkit-app-region:no-drag]">
           <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-md font-bold text-sm text-pm-orange tracking-tight">
@@ -384,7 +430,6 @@ export function App() {
       </header>
 
       <div className="grid grid-cols-[42px_280px_1fr] min-h-0 overflow-hidden max-xl:grid-cols-[42px_240px_1fr] max-lg:grid-cols-[42px_1fr] max-sm:grid-cols-[1fr]">
-        {/* ===== Left Icon Rail ===== */}
         <aside className="bg-pm-bg-s border-r border-pm-border-s flex flex-col items-center py-2 gap-0.5 max-sm:hidden">
           <RailButton title="Collections" active={activeRail === 'collections'} onClick={() => setActiveRail('collections')}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -404,7 +449,6 @@ export function App() {
           </RailButton>
         </aside>
 
-        {/* ===== Sidebar Panel ===== */}
         {activeRail === 'collections' && (
           <Sidebar
             workspaceName={bootstrap.workspace.name}
@@ -433,9 +477,7 @@ export function App() {
           />
         )}
 
-        {/* ===== Main Workspace ===== */}
         <main className="flex flex-col min-w-0 min-h-0 bg-pm-bg overflow-hidden">
-          {/* ===== Tab bar ===== */}
           <div className="flex items-stretch bg-pm-bg-s border-b border-pm-border-s min-h-[36px] overflow-x-auto [&::-webkit-scrollbar]:h-0">
             {tabs.map((tab) => {
               const isActive = tab.tabId === activeTabId;
@@ -462,7 +504,7 @@ export function App() {
                   {tabs.length > 1 && (
                     <span
                       className="w-4 h-4 flex items-center justify-center rounded-sm text-[13px] text-pm-text-t shrink-0 opacity-0 group-hover:opacity-100 hover:bg-pm-active hover:text-pm-text transition-all duration-100"
-                      onClick={(e) => { e.stopPropagation(); closeTab(tab.tabId); }}
+                      onClick={(event) => { event.stopPropagation(); closeTab(tab.tabId); }}
                     >
                       &times;
                     </span>
@@ -488,9 +530,16 @@ export function App() {
             </div>
           </div>
 
-          {/* Request area with draggable splitter */}
           <SplitPane
-            top={<RequestEditor draft={draft} onChange={handleDraftChange} onSave={handleSave} onSend={handleSend} />}
+            top={
+              <RequestEditor
+                draft={draft}
+                loading={activeTab?.loading ?? false}
+                onChange={handleDraftChange}
+                onSave={handleSave}
+                onSend={handleSend}
+              />
+            }
             bottom={
               <ResponsePanel
                 response={activeTab?.response ?? null}
@@ -501,7 +550,6 @@ export function App() {
             }
           />
 
-          {/* Status bar */}
           <div className="flex items-center justify-between px-3 h-6 bg-pm-bg-s border-t border-pm-border-s text-[11px] text-pm-text-t shrink-0">
             <div className="flex items-center gap-3">
               <span className="w-1.5 h-1.5 rounded-full bg-st-success" />
@@ -515,7 +563,6 @@ export function App() {
         </main>
       </div>
 
-      {/* ===== Import cURL Modal ===== */}
       {showCurlModal && (
         <ImportCurlModal
           onImport={handleImportCurl}
@@ -525,8 +572,6 @@ export function App() {
     </div>
   );
 }
-
-/* ===== Helpers ===== */
 
 function extractNameFromUrl(url: string): string {
   try {
@@ -541,21 +586,31 @@ function extractNameFromUrl(url: string): string {
   }
 }
 
-function requestToDraft(r: RequestRecord): SaveRequestDraftInput {
+function requestToDraft(request: RequestRecord): SaveRequestDraftInput {
   return {
-    id: r.id,
-    workspaceId: r.workspaceId,
-    collectionId: r.collectionId,
-    folderId: r.folderId,
-    name: r.name,
-    method: r.method,
-    url: r.url,
-    queryParams: r.queryParams,
-    headers: r.headers,
-    body: r.body,
-    authType: r.authType,
-    authConfig: r.authConfig,
+    id: request.id,
+    workspaceId: request.workspaceId,
+    collectionId: request.collectionId,
+    folderId: request.folderId,
+    name: request.name,
+    method: request.method,
+    url: request.url,
+    queryParams: request.queryParams,
+    headers: request.headers,
+    bodyType: normalizeBodyType(request.bodyType, request.body),
+    body: request.body,
+    bodyMeta: request.bodyMeta,
+    authType: request.authType,
+    authConfig: request.authConfig,
   };
+}
+
+function normalizeBodyType(bodyType: RequestBodyType | null | undefined, body: string | null | undefined): RequestBodyType {
+  if (bodyType) {
+    return bodyType;
+  }
+
+  return body ? 'raw' : 'none';
 }
 
 function RailButton({ title, active, onClick, children }: { title: string; active?: boolean; onClick?: () => void; children: React.ReactNode }) {
@@ -573,25 +628,23 @@ function RailButton({ title, active, onClick, children }: { title: string; activ
   );
 }
 
-/* ===== Draggable Split Pane ===== */
-
 function SplitPane({ top, bottom }: { top: React.ReactNode; bottom: React.ReactNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [topHeight, setTopHeight] = useState<number | null>(null);
   const dragging = useRef(false);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
+  const handleMouseDown = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
     dragging.current = true;
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
   }, []);
 
   useEffect(() => {
-    function handleMouseMove(e: MouseEvent) {
+    function handleMouseMove(event: MouseEvent) {
       if (!dragging.current || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const newTop = Math.max(120, Math.min(e.clientY - rect.top, rect.height - 120));
+      const newTop = Math.max(120, Math.min(event.clientY - rect.top, rect.height - 120));
       setTopHeight(newTop);
     }
 

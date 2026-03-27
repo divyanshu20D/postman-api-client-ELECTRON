@@ -1,7 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { db } from './connection';
+import { db, sqlite } from './connection';
 
 let initialized = false;
+
+function ensureColumn(tableName: string, columnName: string, definition: string) {
+  const columns = sqlite.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  const exists = columns.some((column) => column.name === columnName);
+  if (!exists) {
+    sqlite.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
 
 export function initializeDatabase() {
   if (initialized) {
@@ -39,7 +47,9 @@ export function initializeDatabase() {
       url text NOT NULL,
       query_params text NOT NULL,
       headers text NOT NULL,
+      body_type text,
       body text,
+      body_meta text,
       auth_type text,
       auth_config text,
       created_at text NOT NULL,
@@ -90,6 +100,9 @@ export function initializeDatabase() {
       updated_at text NOT NULL
     );
   `);
+
+  ensureColumn('requests', 'body_type', 'text');
+  ensureColumn('requests', 'body_meta', 'text');
 
   initialized = true;
 }

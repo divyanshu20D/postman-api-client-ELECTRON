@@ -1,5 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ExecutionResult } from '@shared/models';
+import {
+  copyTextToClipboard,
+  formatJson,
+  getCollapsibleJsonPaths,
+  HighlightedJsonView,
+  JsonTreeView,
+  parseJsonValue,
+} from './JsonCodeBlock';
 
 const RESPONSE_TABS = ['Body', 'Headers', 'Console'] as const;
 type ResponseTab = (typeof RESPONSE_TABS)[number];
@@ -25,16 +33,57 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function prettyPrintBody(body: string): string {
-  try {
-    return JSON.stringify(JSON.parse(body), null, 2);
-  } catch {
-    return body;
-  }
-}
-
 export function ResponsePanel({ response, loading, error, consoleLogs }: ResponsePanelProps) {
   const [activeTab, setActiveTab] = useState<ResponseTab>('Body');
+  const [jsonViewMode, setJsonViewMode] = useState<'tree' | 'raw'>('tree');
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
+  const [copyLabel, setCopyLabel] = useState('Copy');
+
+  const formattedBody = useMemo(
+    () => formatJson(response?.body ?? ''),
+    [response?.body],
+  );
+  const parsedBody = useMemo(
+    () => parseJsonValue(response?.body ?? ''),
+    [response?.body],
+  );
+  const collapsiblePaths = useMemo(
+    () => (parsedBody !== undefined ? getCollapsibleJsonPaths(parsedBody) : []),
+    [parsedBody],
+  );
+
+  useEffect(() => {
+    setJsonViewMode('tree');
+    setCollapsedPaths(new Set());
+    setCopyLabel('Copy');
+  }, [response?.body]);
+
+  async function handleCopyBody() {
+    const text = formattedBody ?? response?.body ?? '';
+    const copied = await copyTextToClipboard(text);
+    setCopyLabel(copied ? 'Copied' : 'Copy failed');
+    window.setTimeout(() => setCopyLabel('Copy'), 1200);
+  }
+
+  function handleCollapseAll() {
+    setCollapsedPaths(new Set(collapsiblePaths));
+  }
+
+  function handleExpandAll() {
+    setCollapsedPaths(new Set());
+  }
+
+  function handleTogglePath(path: string) {
+    setCollapsedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }
 
   return (
     <div className="flex-1 flex flex-col min-h-[180px] overflow-hidden">
@@ -114,9 +163,70 @@ export function ResponsePanel({ response, loading, error, consoleLogs }: Respons
                 </div>
               </div>
             ) : response ? (
-              <pre className="m-0 p-4 font-mono text-xs leading-[1.7] text-pm-text whitespace-pre-wrap break-words">
-                {prettyPrintBody(response.body)}
-              </pre>
+              formattedBody && parsedBody !== undefined ? (
+                <div className="flex flex-col h-full">
+                  <div className="flex items-center gap-2 px-4 py-2 border-b border-pm-border-s bg-pm-bg-s text-[11px] text-pm-text-t">
+                    <button
+                      type="button"
+                      onClick={() => setJsonViewMode('tree')}
+                      className={`px-2 py-0.5 rounded border transition-all duration-150 ${
+                        jsonViewMode === 'tree'
+                          ? 'border-pm-orange text-pm-text bg-pm-active'
+                          : 'border-pm-border hover:bg-pm-hover hover:text-pm-text'
+                      }`}
+                    >
+                      Tree
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setJsonViewMode('raw')}
+                      className={`px-2 py-0.5 rounded border transition-all duration-150 ${
+                        jsonViewMode === 'raw'
+                          ? 'border-pm-orange text-pm-text bg-pm-active'
+                          : 'border-pm-border hover:bg-pm-hover hover:text-pm-text'
+                      }`}
+                    >
+                      Raw
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyBody()}
+                      className="px-2 py-0.5 rounded border border-pm-border hover:bg-pm-hover hover:text-pm-text transition-all duration-150"
+                    >
+                      {copyLabel}
+                    </button>
+                    {jsonViewMode === 'tree' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleExpandAll}
+                          className="px-2 py-0.5 rounded border border-pm-border hover:bg-pm-hover hover:text-pm-text transition-all duration-150"
+                        >
+                          Expand all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCollapseAll}
+                          className="px-2 py-0.5 rounded border border-pm-border hover:bg-pm-hover hover:text-pm-text transition-all duration-150"
+                        >
+                          Collapse all
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex-1 overflow-auto">
+                    {jsonViewMode === 'tree' ? (
+                      <JsonTreeView value={parsedBody} collapsedPaths={collapsedPaths} onToggle={handleTogglePath} />
+                    ) : (
+                      <HighlightedJsonView value={formattedBody} />
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <pre className="m-0 p-4 font-mono text-xs leading-[1.7] text-pm-text whitespace-pre-wrap break-words">
+                  {response.body}
+                </pre>
+              )
             ) : error ? (
               <div className="p-4 text-st-error text-xs font-mono">{error}</div>
             ) : null
