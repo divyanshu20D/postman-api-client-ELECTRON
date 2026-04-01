@@ -133,7 +133,7 @@ export function HighlightedJsonEditor({
 
 export function JsonTreeView({ value, collapsedPaths, onToggle, className = '' }: JsonTreeViewProps) {
   return (
-    <div className={`p-4 font-mono text-xs leading-[1.7] text-pm-text ${className}`}>
+    <div className={`min-w-0 p-4 font-mono text-xs leading-[1.7] text-pm-text ${className}`}>
       <TreeNode
         label={null}
         value={value}
@@ -168,9 +168,9 @@ function TreeNode({
 
   if (!isContainer(value)) {
     return (
-      <div style={indentStyle} className="flex items-start gap-1 whitespace-pre">
+      <div style={indentStyle} className="flex min-w-0 items-start gap-1 whitespace-pre-wrap break-all">
         <span className="w-4 h-4 shrink-0" />
-        <span>
+        <span className="min-w-0">
           <NodeLabel label={label} parentType={parentType} />
           <PrimitiveValue value={value} />
         </span>
@@ -188,7 +188,7 @@ function TreeNode({
 
   return (
     <div>
-      <div style={indentStyle} className="flex items-start gap-1 whitespace-pre">
+      <div style={indentStyle} className="flex min-w-0 items-start gap-1 whitespace-pre-wrap break-all">
         {hasChildren ? (
           <button
             type="button"
@@ -231,7 +231,7 @@ function TreeNode({
       ))}
 
       {!collapsed && hasChildren && (
-        <div style={indentStyle} className="whitespace-pre">
+        <div style={indentStyle} className="whitespace-pre-wrap break-all">
           <span className="inline-block w-4 shrink-0" />
           <span className="text-pm-text-t">{closeBracket}</span>
         </div>

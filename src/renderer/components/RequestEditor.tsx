@@ -17,9 +17,10 @@ import {
   JsonTreeView,
   parseJsonValue,
 } from './JsonCodeBlock';
+import { parseCurl } from '../utils/curl-parser';
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
-const REQUEST_TABS = ['Params', 'Headers', 'Body', 'Auth'] as const;
+const REQUEST_TABS = ['Params', 'Headers', 'Body', 'Auth', 'cURL'] as const;
 const BODY_TYPES: RequestBodyType[] = ['none', 'raw', 'form-data', 'x-www-form-urlencoded', 'binary'];
 
 type RequestTab = (typeof REQUEST_TABS)[number];
@@ -135,11 +136,26 @@ function formatFileLabel(file: PickedFile | BinaryBodyConfig | FormDataRow) {
   return file.fileName || file.path || file.filePath || 'Choose file';
 }
 
+function extractNameFromUrl(url: string): string {
+  try {
+    const parsedUrl = new URL(url);
+    const segments = parsedUrl.pathname.split('/').filter(Boolean);
+    if (segments.length > 0) {
+      return segments[segments.length - 1].replace(/[_-]/g, ' ');
+    }
+
+    return parsedUrl.hostname;
+  } catch {
+    return 'Imported Request';
+  }
+}
+
 export function RequestEditor({ draft, loading, onChange, onSave, onSend }: RequestEditorProps) {
   const [activeTab, setActiveTab] = useState<RequestTab>('Params');
   const [rawJsonViewMode, setRawJsonViewMode] = useState<'editor' | 'preview'>('editor');
   const [rawCollapsedPaths, setRawCollapsedPaths] = useState<Set<string>>(new Set());
   const [copyLabel, setCopyLabel] = useState('Copy');
+  const [curlCopyLabel, setCurlCopyLabel] = useState('Copy cURL');
   const bodyType = draft.bodyType ?? (draft.body ? 'raw' : 'none');
 
   const queryRows = useMemo(
@@ -175,6 +191,19 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
   const headerCount = getActiveCount(headerRows);
   const formDataCount = getActiveFormDataCount(formDataRows);
   const urlEncodedCount = getActiveCount(urlEncodedRows);
+  const generatedCurl = useMemo(
+    () =>
+      buildCurlCommand({
+        draft,
+        bodyType,
+        queryRows,
+        headerRows,
+        formDataRows,
+        urlEncodedRows,
+        binaryConfig,
+      }),
+    [binaryConfig, bodyType, draft, formDataRows, headerRows, queryRows, urlEncodedRows],
+  );
 
   useEffect(() => {
     if (!formattedRawBody && rawJsonViewMode === 'preview') {
@@ -183,6 +212,10 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
     setRawCollapsedPaths(new Set());
     setCopyLabel('Copy');
   }, [draft.body, formattedRawBody]);
+
+  useEffect(() => {
+    setCurlCopyLabel('Copy cURL');
+  }, [generatedCurl]);
 
   function updateDraft(next: Partial<SaveRequestDraftInput>) {
     onChange({ ...draft, ...next });
@@ -276,6 +309,12 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
     window.setTimeout(() => setCopyLabel('Copy'), 1200);
   }
 
+  async function handleCopyCurl() {
+    const copied = await copyTextToClipboard(generatedCurl);
+    setCurlCopyLabel(copied ? 'Copied' : 'Copy failed');
+    window.setTimeout(() => setCurlCopyLabel('Copy cURL'), 1200);
+  }
+
   function handleCollapseAllRawJson() {
     if (parsedRawBody === undefined) {
       return;
@@ -300,9 +339,37 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
     });
   }
 
+  function handleUrlPaste(event: React.ClipboardEvent<HTMLInputElement>) {
+    const pastedText = event.clipboardData.getData('text').trim();
+    if (!/^curl\s+/i.test(pastedText)) {
+      return;
+    }
+
+    const parsed = parseCurl(pastedText);
+    if (!parsed.url) {
+      return;
+    }
+
+    event.preventDefault();
+    updateDraft({
+      name: !draft.name || draft.name === 'Untitled Request'
+        ? extractNameFromUrl(parsed.url)
+        : draft.name,
+      method: parsed.method,
+      url: parsed.url,
+      queryParams: '[]',
+      headers: JSON.stringify(parsed.headers, null, 2),
+      bodyType: parsed.bodyType,
+      body: parsed.body,
+      bodyMeta: parsed.bodyMeta,
+      authType: parsed.authType,
+      authConfig: parsed.authConfig,
+    });
+  }
+
   return (
     <>
-      <div className="flex items-center gap-0 px-4 py-2.5 border-b border-pm-border-s bg-pm-bg">
+      <div className="shrink-0 flex items-center gap-0 px-4 py-2.5 border-b border-pm-border-s bg-pm-bg">
         <select
           className={`pm-input w-auto min-w-[100px] py-[7px] px-2.5 font-bold text-[13px] bg-pm-bg-t border-pm-border rounded-l rounded-r-none border-r-0 cursor-pointer ${
             METHOD_SELECT_COLOR[draft.method] ?? ''
@@ -315,15 +382,16 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
           ))}
         </select>
         <input
-          className="pm-input flex-1 py-[7px] px-3 text-[13px] bg-pm-bg-input border-pm-border rounded-none border-l-0 border-r-0"
+          className="pm-input flex-1 py-[7px] px-3 text-[15px] bg-pm-bg-input border-pm-border rounded-none border-l-0 border-r-0"
           value={draft.url}
           onChange={(e) => updateDraft({ url: e.target.value })}
+          onPaste={handleUrlPaste}
           placeholder="Enter request URL"
         />
         <button
           className={`py-[7px] px-5 text-white font-bold text-[13px] rounded-r rounded-l-none border whitespace-nowrap transition-colors duration-150 ${
             loading
-              ? 'bg-st-error border-st-error hover:bg-st-error/90'
+              ? 'bg-pm-bg-t border-pm-border-strong text-pm-text hover:bg-pm-hover'
               : 'bg-pm-orange border-pm-orange hover:bg-pm-orange-h'
           }`}
           type="button"
@@ -341,7 +409,7 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
         </button>
       </div>
 
-      <div className="flex items-center gap-0 px-4 border-b border-pm-border-s bg-pm-bg">
+      <div className="shrink-0 flex items-center gap-0 px-4 border-b border-pm-border-s bg-pm-bg">
         {REQUEST_TABS.map((tab) => (
           <button
             key={tab}
@@ -401,7 +469,7 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
 
         {activeTab === 'Body' && (
           <div className="flex flex-col flex-1 min-h-0">
-            <div className="flex items-center gap-3 px-4 py-2 border-b border-pm-border-s text-xs text-pm-text-s overflow-x-auto">
+            <div className="shrink-0 flex items-center gap-3 px-4 py-2 border-b border-pm-border-s text-xs text-pm-text-s overflow-x-auto">
               {BODY_TYPES.map((type) => (
                 <label
                   key={type}
@@ -639,9 +707,189 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
             )}
           </div>
         )}
+
+        {activeTab === 'cURL' && (
+          <div className="flex flex-col flex-1 min-h-0">
+            <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-pm-border-s bg-pm-bg">
+              <span className="text-xs text-pm-text-s">
+                Generated cURL for this request
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleCopyCurl()}
+                className="px-2.5 py-0.5 text-[11px] font-medium text-pm-text-t border border-pm-border rounded hover:bg-pm-hover hover:text-pm-text transition-all duration-150"
+              >
+                {curlCopyLabel}
+              </button>
+            </div>
+            <textarea
+              className="flex-1 w-full min-h-[200px] p-4 bg-pm-bg border-none rounded-none font-mono text-xs leading-relaxed text-pm-text resize-none outline-none focus:ring-0 focus:border-transparent"
+              value={generatedCurl}
+              readOnly
+              spellCheck={false}
+            />
+          </div>
+        )}
       </div>
     </>
   );
+}
+
+function buildCurlCommand({
+  draft,
+  bodyType,
+  queryRows,
+  headerRows,
+  formDataRows,
+  urlEncodedRows,
+  binaryConfig,
+}: {
+  draft: SaveRequestDraftInput;
+  bodyType: RequestBodyType;
+  queryRows: KeyValueRow[];
+  headerRows: KeyValueRow[];
+  formDataRows: FormDataRow[];
+  urlEncodedRows: KeyValueRow[];
+  binaryConfig: BinaryBodyConfig;
+}) {
+  const segments: string[] = ['curl', `-X ${draft.method}`];
+  const headers = new Map<string, { key: string; value: string }>();
+
+  for (const row of headerRows) {
+    if (!row.enabled || !row.key) {
+      continue;
+    }
+
+    headers.set(row.key.toLowerCase(), { key: row.key, value: row.value });
+  }
+
+  if (draft.authType === 'bearer' && draft.authConfig) {
+    headers.set('authorization', {
+      key: 'Authorization',
+      value: `Bearer ${draft.authConfig}`,
+    });
+  } else if (draft.authType === 'apikey' && draft.authConfig) {
+    try {
+      const config = JSON.parse(draft.authConfig) as { key?: string; value?: string };
+      if (config.key && config.value) {
+        headers.set(config.key.toLowerCase(), {
+          key: config.key,
+          value: config.value,
+        });
+      }
+    } catch {
+      // Ignore invalid auth config in export.
+    }
+  }
+
+  const finalUrl = buildRequestUrl(draft.url, queryRows);
+  segments.push(quoteCurlArg(finalUrl));
+
+  if (draft.authType === 'basic' && draft.authConfig) {
+    try {
+      const creds = JSON.parse(draft.authConfig) as { username?: string; password?: string };
+      segments.push(`-u ${quoteCurlArg(`${creds.username ?? ''}:${creds.password ?? ''}`)}`);
+    } catch {
+      // Ignore invalid auth config in export.
+    }
+  }
+
+  if (bodyType === 'x-www-form-urlencoded' && !headers.has('content-type')) {
+    headers.set('content-type', {
+      key: 'Content-Type',
+      value: 'application/x-www-form-urlencoded;charset=UTF-8',
+    });
+  }
+
+  if (bodyType === 'binary' && binaryConfig.contentType && !headers.has('content-type')) {
+    headers.set('content-type', {
+      key: 'Content-Type',
+      value: binaryConfig.contentType,
+    });
+  }
+
+  for (const { key, value } of headers.values()) {
+    segments.push(`-H ${quoteCurlArg(`${key}: ${value}`)}`);
+  }
+
+  switch (bodyType) {
+    case 'raw':
+      if (draft.body) {
+        segments.push(`--data-raw ${quoteCurlArg(draft.body)}`);
+      }
+      break;
+    case 'x-www-form-urlencoded': {
+      const searchParams = new URLSearchParams();
+      for (const row of urlEncodedRows) {
+        if (row.enabled && row.key) {
+          searchParams.append(row.key, row.value);
+        }
+      }
+      const encodedBody = searchParams.toString();
+      if (encodedBody) {
+        segments.push(`--data-raw ${quoteCurlArg(encodedBody)}`);
+      }
+      break;
+    }
+    case 'form-data':
+      for (const row of formDataRows) {
+        if (!row.enabled || !row.key) {
+          continue;
+        }
+
+        if (row.kind === 'file' && row.filePath) {
+          const filePart = row.contentType
+            ? `@${row.filePath};type=${row.contentType}`
+            : `@${row.filePath}`;
+          segments.push(`--form ${quoteCurlArg(`${row.key}=${filePart}`)}`);
+          continue;
+        }
+
+        if (row.kind === 'text') {
+          segments.push(`--form ${quoteCurlArg(`${row.key}=${row.value}`)}`);
+        }
+      }
+      break;
+    case 'binary':
+      if (binaryConfig.filePath) {
+        segments.push(`--data-binary ${quoteCurlArg(`@${binaryConfig.filePath}`)}`);
+      }
+      break;
+    case 'none':
+    default:
+      break;
+  }
+
+  return segments.join(' \\\n  ');
+}
+
+function buildRequestUrl(url: string, queryRows: KeyValueRow[]) {
+  const enabledParams = queryRows.filter((row) => row.enabled && row.key);
+  if (enabledParams.length === 0) {
+    return url;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    for (const row of enabledParams) {
+      parsedUrl.searchParams.set(row.key, row.value);
+    }
+    return parsedUrl.toString();
+  } catch {
+    const searchParams = new URLSearchParams();
+    for (const row of enabledParams) {
+      searchParams.append(row.key, row.value);
+    }
+    const queryString = searchParams.toString();
+    if (!queryString) {
+      return url;
+    }
+    return `${url}${url.includes('?') ? '&' : '?'}${queryString}`;
+  }
+}
+
+function quoteCurlArg(value: string) {
+  return JSON.stringify(value);
 }
 
 interface KeyValueTableProps {

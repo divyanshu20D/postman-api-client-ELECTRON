@@ -23,6 +23,34 @@ export interface AppBootstrap {
   history: HistoryEntryRecord[];
 }
 
+export interface ExportCollectionInput {
+  collectionId: string;
+}
+
+export interface ExportCollectionResult {
+  filePath: string;
+  collectionName: string;
+  folderCount: number;
+  requestCount: number;
+}
+
+export interface ImportCollectionResult {
+  collectionId: string;
+  collectionName: string;
+  folderCount: number;
+  requestCount: number;
+  missingFileCount: number;
+}
+
+export interface DeleteCollectionResult {
+  deletedCollectionCount: number;
+  deletedRequestCount: number;
+}
+
+export interface DeleteRequestResult {
+  id: string;
+}
+
 const requestBodyTypeSchema = z.enum(['none', 'raw', 'form-data', 'x-www-form-urlencoded', 'binary']);
 const executionIdSchema = z.string().uuid();
 
@@ -44,6 +72,40 @@ export const saveRequestDraftSchema = z.object({
 });
 
 export type SaveRequestDraftInput = z.infer<typeof saveRequestDraftSchema>;
+
+export const createCollectionSchema = z.object({
+  workspaceId: z.string().uuid(),
+  name: z.string().min(1).max(120),
+  parentId: z.string().uuid().nullable().optional(),
+  kind: z.enum(['collection', 'folder']).default('collection'),
+});
+
+export type CreateCollectionInput = z.infer<typeof createCollectionSchema>;
+
+export const updateCollectionSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(120),
+});
+
+export type UpdateCollectionInput = z.infer<typeof updateCollectionSchema>;
+
+export const exportCollectionSchema = z.object({
+  collectionId: z.string().uuid(),
+});
+
+export type ExportCollectionSchemaInput = z.infer<typeof exportCollectionSchema>;
+
+export const deleteCollectionSchema = z.object({
+  id: z.string().uuid(),
+});
+
+export type DeleteCollectionInput = z.infer<typeof deleteCollectionSchema>;
+
+export const deleteRequestSchema = z.object({
+  id: z.string().uuid(),
+});
+
+export type DeleteRequestInput = z.infer<typeof deleteRequestSchema>;
 
 /* ===== Environment inputs ===== */
 
@@ -115,8 +177,14 @@ export const deleteHistoryEntrySchema = z.object({
 export interface AppApi {
   getBootstrap(): Promise<AppBootstrap>;
   listCollections(): Promise<CollectionRecord[]>;
+  createCollection(input: CreateCollectionInput): Promise<CollectionRecord>;
+  updateCollection(input: UpdateCollectionInput): Promise<CollectionRecord>;
+  deleteCollection(id: string): Promise<DeleteCollectionResult>;
+  exportCollection(input: ExportCollectionInput): Promise<ExportCollectionResult | null>;
+  importCollection(): Promise<ImportCollectionResult | null>;
   listRequests(): Promise<RequestRecord[]>;
   saveRequestDraft(input: SaveRequestDraftInput): Promise<RequestRecord>;
+  deleteRequest(id: string): Promise<DeleteRequestResult>;
   pickFiles(input?: PickFilesInput): Promise<PickedFile[]>;
 
   // Execute

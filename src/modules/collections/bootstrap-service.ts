@@ -12,13 +12,7 @@ function now() {
   return new Date().toISOString();
 }
 
-function ensureSeedData() {
-  const existingSettings = db.select().from(appSettings).where(eq(appSettings.id, DEFAULT_SETTINGS_ID)).get();
-  if (existingSettings?.activeWorkspaceId) {
-    return existingSettings.activeWorkspaceId;
-  }
-
-  const timestamp = now();
+function createWorkspace(timestamp: string) {
   const workspaceId = randomUUID();
 
   db.insert(workspaces)
@@ -29,6 +23,38 @@ function ensureSeedData() {
       updatedAt: timestamp,
     })
     .run();
+
+  return workspaceId;
+}
+
+function ensureSeedData() {
+  const existingSettings = db.select().from(appSettings).where(eq(appSettings.id, DEFAULT_SETTINGS_ID)).get();
+  if (existingSettings?.activeWorkspaceId) {
+    const existingWorkspace = db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, existingSettings.activeWorkspaceId))
+      .get();
+
+    if (existingWorkspace) {
+      return existingWorkspace.id;
+    }
+  }
+
+  const timestamp = now();
+  const workspaceId = createWorkspace(timestamp);
+
+  if (existingSettings) {
+    db.update(appSettings)
+      .set({
+        activeWorkspaceId: workspaceId,
+        updatedAt: timestamp,
+      })
+      .where(eq(appSettings.id, DEFAULT_SETTINGS_ID))
+      .run();
+
+    return workspaceId;
+  }
 
   db.insert(appSettings)
     .values({

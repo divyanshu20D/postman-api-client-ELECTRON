@@ -7,12 +7,27 @@ import type { BinaryBodyConfig, ExecutionResult, FormDataRow, KeyValueRow, Reque
 
 type HeaderRow = KeyValueRow;
 
-const activeExecutions = new Map<string, AbortController>();
+const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
+
+interface ActiveExecution {
+  controller: AbortController;
+  timeoutHandle: NodeJS.Timeout;
+  timedOut: boolean;
+}
+
+const activeExecutions = new Map<string, ActiveExecution>();
 
 class RequestCancelledError extends Error {
   constructor() {
     super('Request cancelled');
     this.name = 'RequestCancelledError';
+  }
+}
+
+class RequestTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    this.name = 'RequestTimeoutError';
   }
 }
 
@@ -22,7 +37,15 @@ class RequestCancelledError extends Error {
  */
 export async function executeRequest(input: ExecuteRequestInput): Promise<ExecutionResult> {
   const controller = new AbortController();
-  activeExecutions.set(input.executionId, controller);
+  const execution: ActiveExecution = {
+    controller,
+    timeoutHandle: setTimeout(() => {
+      execution.timedOut = true;
+      controller.abort();
+    }, DEFAULT_REQUEST_TIMEOUT_MS),
+    timedOut: false,
+  };
+  activeExecutions.set(input.executionId, execution);
 
   // Build headers
   const headerRows = parseJson<HeaderRow[]>(input.headers, []);
@@ -107,6 +130,9 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
     };
   } catch (err) {
     if (isAbortError(err)) {
+      if (execution.timedOut) {
+        throw new RequestTimeoutError(DEFAULT_REQUEST_TIMEOUT_MS);
+      }
       throw new RequestCancelledError();
     }
 
@@ -122,6 +148,7 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
       sizeBytes: 0,
     };
   } finally {
+    clearTimeout(execution.timeoutHandle);
     activeExecutions.delete(input.executionId);
   }
 
@@ -162,12 +189,12 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
 }
 
 export function cancelRequestExecution(executionId: string): boolean {
-  const controller = activeExecutions.get(executionId);
-  if (!controller) {
+  const execution = activeExecutions.get(executionId);
+  if (!execution) {
     return false;
   }
 
-  controller.abort();
+  execution.controller.abort();
   return true;
 }
 

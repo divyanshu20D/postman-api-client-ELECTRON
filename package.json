@@ -1,8 +1,8 @@
 {
-  "name": "local-postman-client",
+  "name": "reqkit",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first desktop API client built with Electron, React, TypeScript, SQLite, and Drizzle.",
+  "description": "ReqKit is a local-first desktop API client built with Electron, React, TypeScript, SQLite, and Drizzle.",
   "main": "dist-electron/index.js",
   "author": "Divyanshu Srivastava",
   "scripts": {
@@ -48,8 +48,8 @@
     "wait-on": "^8.0.4"
   },
   "build": {
-    "appId": "com.localpostman.client",
-    "productName": "Local Postman Client",
+    "appId": "com.reqkit.app",
+    "productName": "ReqKit",
     "files": [
       "dist/**",
       "dist-electron/**",

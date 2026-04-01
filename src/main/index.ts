@@ -10,7 +10,7 @@ function createMainWindow() {
     height: 920,
     minWidth: 1120,
     minHeight: 760,
-    title: 'Local Postman Client',
+    title: 'ReqKit',
     backgroundColor: '#10151c',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -26,6 +26,8 @@ function createMainWindow() {
   } else {
     void mainWindow.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'));
   }
+
+  mainWindow.setTitle('ReqKit');
 
   mainWindow.on('closed', () => {
     mainWindow = null;

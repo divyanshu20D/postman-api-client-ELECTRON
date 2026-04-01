@@ -153,7 +153,7 @@ export function ResponsePanel({ response, loading, error, consoleLogs }: Respons
           </div>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto bg-pm-bg">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden bg-pm-bg">
           {activeTab === 'Body' && (
             loading ? (
               <div className="flex items-center justify-center p-12 text-pm-text-t">
@@ -214,7 +214,7 @@ export function ResponsePanel({ response, loading, error, consoleLogs }: Respons
                       </>
                     )}
                   </div>
-                  <div className="flex-1 overflow-auto">
+                  <div className="flex-1 overflow-y-auto overflow-x-hidden">
                     {jsonViewMode === 'tree' ? (
                       <JsonTreeView value={parsedBody} collapsedPaths={collapsedPaths} onToggle={handleTogglePath} />
                     ) : (
@@ -223,17 +223,17 @@ export function ResponsePanel({ response, loading, error, consoleLogs }: Respons
                   </div>
                 </div>
               ) : (
-                <pre className="m-0 p-4 font-mono text-xs leading-[1.7] text-pm-text whitespace-pre-wrap break-words">
+                <pre className="m-0 p-4 font-mono text-xs leading-[1.7] text-pm-text whitespace-pre-wrap break-all">
                   {response.body}
                 </pre>
               )
             ) : error ? (
-              <div className="p-4 text-st-error text-xs font-mono">{error}</div>
+              <div className="p-4 text-st-error text-xs font-mono whitespace-pre-wrap break-all">{error}</div>
             ) : null
           )}
 
           {activeTab === 'Headers' && response && (
-            <table className="w-full border-collapse text-xs">
+            <table className="w-full table-fixed border-collapse text-xs">
               <thead>
                 <tr>
                   <th className="text-left py-2 px-4 bg-pm-bg-s text-pm-text-t text-[11px] font-semibold uppercase tracking-wide border-b border-pm-border-s">
@@ -247,8 +247,8 @@ export function ResponsePanel({ response, loading, error, consoleLogs }: Respons
               <tbody>
                 {response.headers.map(({ key, value }) => (
                   <tr key={key} className="hover:bg-pm-hover transition-colors">
-                    <td className="py-1.5 px-4 border-b border-pm-border-s text-pm-orange font-medium">{key}</td>
-                    <td className="py-1.5 px-4 border-b border-pm-border-s text-pm-text">{value}</td>
+                    <td className="w-[32%] py-1.5 px-4 align-top border-b border-pm-border-s text-pm-orange font-medium whitespace-pre-wrap break-all">{key}</td>
+                    <td className="py-1.5 px-4 align-top border-b border-pm-border-s text-pm-text whitespace-pre-wrap break-all">{value}</td>
                   </tr>
                 ))}
                 {response.headers.length === 0 && (
@@ -261,9 +261,9 @@ export function ResponsePanel({ response, loading, error, consoleLogs }: Respons
           )}
 
           {activeTab === 'Console' && (
-            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-[1.7] bg-pm-bg">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 font-mono text-xs leading-[1.7] bg-pm-bg">
               {consoleLogs.map((log, i) => (
-                <div key={i} className="text-pm-text-s py-px">
+                <div key={i} className="py-px text-pm-text-s whitespace-pre-wrap break-all">
                   {log}
                 </div>
               ))}

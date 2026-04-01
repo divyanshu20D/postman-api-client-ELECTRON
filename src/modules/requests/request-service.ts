@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { db } from '../../db/connection';
-import { appSettings, requests } from '../../db/schema';
-import type { SaveRequestDraftInput } from '../../shared/ipc';
+import { appSettings, historyEntries, requests } from '../../db/schema';
+import type { DeleteRequestResult, SaveRequestDraftInput } from '../../shared/ipc';
 
 const DEFAULT_SETTINGS_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -50,4 +50,16 @@ export function saveRequestDraft(input: SaveRequestDraftInput) {
   }
 
   return db.select().from(requests).where(eq(requests.id, id)).get()!;
+}
+
+export function deleteRequest(id: string): DeleteRequestResult {
+  const existing = db.select().from(requests).where(eq(requests.id, id)).get();
+  if (!existing) {
+    throw new Error('Request not found.');
+  }
+
+  db.delete(historyEntries).where(eq(historyEntries.requestId, id)).run();
+  db.delete(requests).where(eq(requests.id, id)).run();
+
+  return { id };
 }

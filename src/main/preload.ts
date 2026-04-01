@@ -3,20 +3,35 @@ import type {
   AppApi,
   AppBootstrap,
   CancelRequestExecutionInput,
+  CreateCollectionInput,
   CreateEnvironmentInput,
   ExecuteRequestInput,
+  ExportCollectionInput,
   PickFilesInput,
   SaveRequestDraftInput,
   SaveVariableInput,
+  UpdateCollectionInput,
   UpdateEnvironmentInput,
 } from '../shared/ipc';
 
 const api: AppApi = {
   getBootstrap: () => ipcRenderer.invoke('app:get-bootstrap') as Promise<AppBootstrap>,
   listCollections: () => ipcRenderer.invoke('collections:list') as ReturnType<AppApi['listCollections']>,
+  createCollection: (input: CreateCollectionInput) =>
+    ipcRenderer.invoke('collections:create', input) as ReturnType<AppApi['createCollection']>,
+  updateCollection: (input: UpdateCollectionInput) =>
+    ipcRenderer.invoke('collections:update', input) as ReturnType<AppApi['updateCollection']>,
+  deleteCollection: (id: string) =>
+    ipcRenderer.invoke('collections:delete', { id }) as ReturnType<AppApi['deleteCollection']>,
+  exportCollection: (input: ExportCollectionInput) =>
+    ipcRenderer.invoke('collections:export', input) as ReturnType<AppApi['exportCollection']>,
+  importCollection: () =>
+    ipcRenderer.invoke('collections:import') as ReturnType<AppApi['importCollection']>,
   listRequests: () => ipcRenderer.invoke('requests:list') as ReturnType<AppApi['listRequests']>,
   saveRequestDraft: (input: SaveRequestDraftInput) =>
     ipcRenderer.invoke('requests:save-draft', input) as ReturnType<AppApi['saveRequestDraft']>,
+  deleteRequest: (id: string) =>
+    ipcRenderer.invoke('requests:delete', { id }) as ReturnType<AppApi['deleteRequest']>,
   pickFiles: (input?: PickFilesInput) =>
     ipcRenderer.invoke('dialog:pick-files', input ?? {}) as ReturnType<AppApi['pickFiles']>,
 
