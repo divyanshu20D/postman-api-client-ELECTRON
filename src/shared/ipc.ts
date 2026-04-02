@@ -52,6 +52,12 @@ export interface DeleteRequestResult {
   id: string;
 }
 
+export interface LogPaths {
+  logsDirectory: string;
+  mainLogPath: string;
+  rendererLogPath: string;
+}
+
 const requestBodyTypeSchema = z.enum(['none', 'raw', 'form-data', 'x-www-form-urlencoded', 'binary']);
 const executionIdSchema = z.string().uuid();
 
@@ -141,6 +147,14 @@ export const setActiveEnvironmentSchema = z.object({
 
 export type SetActiveEnvironmentInput = z.infer<typeof setActiveEnvironmentSchema>;
 
+export const rendererLogSchema = z.object({
+  level: z.enum(['info', 'warn', 'error']).default('error'),
+  message: z.string().min(1),
+  details: z.unknown().optional(),
+});
+
+export type RendererLogInput = z.infer<typeof rendererLogSchema>;
+
 /* ===== Execute request ===== */
 
 export const executeRequestSchema = z.object({
@@ -184,6 +198,7 @@ export const deleteHistoryEntrySchema = z.object({
 
 export interface AppApi {
   getBootstrap(): Promise<AppBootstrap>;
+  getLogPaths(): Promise<LogPaths>;
   listCollections(): Promise<CollectionRecord[]>;
   createCollection(input: CreateCollectionInput): Promise<CollectionRecord>;
   updateCollection(input: UpdateCollectionInput): Promise<CollectionRecord>;

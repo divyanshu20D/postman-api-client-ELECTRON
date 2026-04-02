@@ -1,6 +1,6 @@
 {
   "name": "reqkit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "ReqKit is a local-first desktop API client built with Electron, React, TypeScript, SQLite, and Drizzle.",
   "main": "dist-electron/index.js",
@@ -60,7 +60,8 @@
     },
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "icon": "build/icon.ico"
     },
     "forceCodeSigning": false
   }

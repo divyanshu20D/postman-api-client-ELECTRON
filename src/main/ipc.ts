@@ -1,6 +1,14 @@
 import { dialog } from 'electron';
 import path from 'node:path';
 import type { IpcMain } from 'electron';
+import {
+  getLogsDirectory,
+  getMainLogPath,
+  getRendererLogPath,
+  logRendererError,
+  logRendererInfo,
+  logRendererWarn,
+} from './logger';
 import { getAppBootstrap } from '../modules/collections/bootstrap-service';
 import { createCollection, deleteCollection, listCollections, updateCollection } from '../modules/collections/collection-service';
 import {
@@ -29,6 +37,7 @@ import {
   executeRequestSchema,
   exportCollectionSchema,
   pickFilesInputSchema,
+  rendererLogSchema,
   saveRequestDraftSchema,
   setActiveEnvironmentSchema,
   saveVariableSchema,
@@ -43,6 +52,11 @@ function sanitizeFileName(name: string) {
 export function registerAppIpc(ipcMain: IpcMain) {
   // Bootstrap
   ipcMain.handle('app:get-bootstrap', async () => getAppBootstrap());
+  ipcMain.handle('app:get-log-paths', async () => ({
+    logsDirectory: getLogsDirectory(),
+    mainLogPath: getMainLogPath(),
+    rendererLogPath: getRendererLogPath(),
+  }));
 
   // Collections
   ipcMain.handle('collections:list', async () => listCollections());
@@ -133,6 +147,22 @@ export function registerAppIpc(ipcMain: IpcMain) {
   ipcMain.handle('requests:cancel-execution', async (_event, input: unknown) => {
     const { executionId } = cancelRequestExecutionSchema.parse(input);
     return cancelRequestExecution(executionId);
+  });
+
+  ipcMain.handle('logs:renderer', async (_event, input: unknown) => {
+    const payload = rendererLogSchema.parse(input);
+
+    if (payload.level === 'info') {
+      logRendererInfo(payload.message, payload.details);
+      return;
+    }
+
+    if (payload.level === 'warn') {
+      logRendererWarn(payload.message, payload.details);
+      return;
+    }
+
+    logRendererError(payload.message, payload.details);
   });
 
   // History

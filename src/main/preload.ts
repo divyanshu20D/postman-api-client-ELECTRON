@@ -7,7 +7,9 @@ import type {
   CreateEnvironmentInput,
   ExecuteRequestInput,
   ExportCollectionInput,
+  LogPaths,
   PickFilesInput,
+  RendererLogInput,
   SaveRequestDraftInput,
   SaveVariableInput,
   SetActiveEnvironmentInput,
@@ -17,6 +19,7 @@ import type {
 
 const api: AppApi = {
   getBootstrap: () => ipcRenderer.invoke('app:get-bootstrap') as Promise<AppBootstrap>,
+  getLogPaths: () => ipcRenderer.invoke('app:get-log-paths') as Promise<LogPaths>,
   listCollections: () => ipcRenderer.invoke('collections:list') as ReturnType<AppApi['listCollections']>,
   createCollection: (input: CreateCollectionInput) =>
     ipcRenderer.invoke('collections:create', input) as ReturnType<AppApi['createCollection']>,
@@ -70,3 +73,45 @@ const api: AppApi = {
 };
 
 contextBridge.exposeInMainWorld('appApi', api);
+
+function sendRendererLog(payload: RendererLogInput) {
+  void ipcRenderer.invoke('logs:renderer', payload).catch(() => {
+    // Avoid throwing from preload while trying to log failures.
+  });
+}
+
+window.addEventListener('error', (event) => {
+  sendRendererLog({
+    level: 'error',
+    message: 'Unhandled renderer error',
+    details: {
+      message: event.message,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+      error: event.error instanceof Error
+        ? {
+            name: event.error.name,
+            message: event.error.message,
+            stack: event.error.stack ?? null,
+          }
+        : event.error ?? null,
+    },
+  });
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason instanceof Error
+    ? {
+        name: event.reason.name,
+        message: event.reason.message,
+        stack: event.reason.stack ?? null,
+      }
+    : event.reason;
+
+  sendRendererLog({
+    level: 'error',
+    message: 'Unhandled renderer promise rejection',
+    details: { reason },
+  });
+});
