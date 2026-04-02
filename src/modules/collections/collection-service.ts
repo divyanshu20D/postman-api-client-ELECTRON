@@ -86,13 +86,19 @@ export function deleteCollection(id: string): DeleteCollectionResult {
     .all();
   const descendantFolderIds = getDescendantFolderIds(workspaceCollections, id);
   const deletedCollectionIds = [id, ...descendantFolderIds];
-
-  const deletedRequests = db.select().from(requests).where(eq(requests.collectionId, id)).all();
+  const workspaceRequests = db
+    .select()
+    .from(requests)
+    .where(eq(requests.workspaceId, existing.workspaceId))
+    .all();
+  const deletedRequests = existing.kind === 'collection'
+    ? workspaceRequests.filter((request) => request.collectionId === existing.id)
+    : workspaceRequests.filter((request) => request.folderId !== null && deletedCollectionIds.includes(request.folderId));
   const deletedRequestIds = deletedRequests.map((request) => request.id);
 
   if (deletedRequestIds.length > 0) {
     db.delete(historyEntries).where(inArray(historyEntries.requestId, deletedRequestIds)).run();
-    db.delete(requests).where(eq(requests.collectionId, id)).run();
+    db.delete(requests).where(inArray(requests.id, deletedRequestIds)).run();
   }
 
   db.delete(collections).where(inArray(collections.id, deletedCollectionIds)).run();

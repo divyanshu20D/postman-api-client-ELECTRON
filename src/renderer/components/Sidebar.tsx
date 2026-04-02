@@ -12,6 +12,7 @@ interface SidebarProps {
   historyCount: number;
   environmentCount: number;
   onNewCollection(name: string): void;
+  onNewFolder(name: string, parentId: string): void;
   onImportCollection(): void;
   onSelectCollection(collection: CollectionRecord | null): void;
   onNewRequest(name: string, collectionId: string | null): void;
@@ -45,7 +46,8 @@ interface CollectionNode {
 
 type CreateState =
   | { type: "collection" }
-  | { type: "request"; collectionId: string | null }
+  | { type: "folder"; parentId: string }
+  | { type: "request"; targetId: string | null }
   | null;
 
 function FolderIcon() {
@@ -112,6 +114,7 @@ export function Sidebar({
   activeRequestId,
   selectedCollectionId,
   onNewCollection,
+  onNewFolder,
   onImportCollection,
   onSelectCollection,
   onNewRequest,
@@ -135,11 +138,12 @@ export function Sidebar({
   const [renamingRequestId, setRenamingRequestId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [draggedRequestId, setDraggedRequestId] = useState<string | null>(null);
-  const [dropTargetCollectionId, setDropTargetCollectionId] = useState<string | null>(null);
+  const [dropTargetItemId, setDropTargetItemId] = useState<string | null>(null);
   const [isDropTargetRoot, setIsDropTargetRoot] = useState(false);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
-  const selectedCollection = collections.find((item) => item.id === selectedCollectionId) ?? null;
+  const selectedItem = collections.find((item) => item.id === selectedCollectionId) ?? null;
+  const canExportSelectedCollection = selectedItem?.kind === "collection";
 
   const topLevelCollections = useMemo(
     () =>
@@ -239,18 +243,60 @@ export function Sidebar({
     setExpandedCollections((prev) => ({ ...prev, [collectionId]: open }));
   }
 
+  function findCollection(itemId: string | null | undefined) {
+    if (!itemId) {
+      return null;
+    }
+
+    return collections.find((item) => item.id === itemId) ?? null;
+  }
+
+  function findParentCollectionId(itemId: string | null | undefined): string | null {
+    let current = findCollection(itemId);
+
+    while (current?.kind === "folder" && current.parentId) {
+      current = findCollection(current.parentId);
+    }
+
+    return current?.kind === "collection" ? current.id : null;
+  }
+
+  function getDropPlacement(targetId: string | null) {
+    const target = findCollection(targetId);
+    if (!target) {
+      return { collectionId: null, folderId: null };
+    }
+
+    if (target.kind === "collection") {
+      return { collectionId: target.id, folderId: null };
+    }
+
+    const collectionId = findParentCollectionId(target.id);
+    return {
+      collectionId,
+      folderId: collectionId ? target.id : null,
+    };
+  }
+
   function startCreateCollection() {
     setWorkspaceOpen(true);
     setCreateState({ type: "collection" });
     setDraftName("");
   }
 
-  function startCreateRequest(collectionId: string | null = selectedCollectionId) {
+  function startCreateFolder(parentId: string) {
     setWorkspaceOpen(true);
-    if (collectionId) {
-      setCollectionExpanded(collectionId, true);
+    setCollectionExpanded(parentId, true);
+    setCreateState({ type: "folder", parentId });
+    setDraftName("");
+  }
+
+  function startCreateRequest(targetId: string | null = selectedCollectionId) {
+    setWorkspaceOpen(true);
+    if (targetId) {
+      setCollectionExpanded(targetId, true);
     }
-    setCreateState({ type: "request", collectionId });
+    setCreateState({ type: "request", targetId });
     setDraftName("");
   }
 
@@ -269,7 +315,12 @@ export function Sidebar({
       return;
     }
 
-    onNewRequest(nextName || "Untitled Request", pendingCreate.collectionId);
+    if (pendingCreate.type === "folder") {
+      onNewFolder(nextName || "New Folder", pendingCreate.parentId);
+      return;
+    }
+
+    onNewRequest(nextName || "Untitled Request", pendingCreate.targetId);
   }
 
   function cancelCreate() {
@@ -330,7 +381,7 @@ export function Sidebar({
 
   function clearDragState() {
     setDraggedRequestId(null);
-    setDropTargetCollectionId(null);
+    setDropTargetItemId(null);
     setIsDropTargetRoot(false);
   }
 
@@ -348,14 +399,18 @@ export function Sidebar({
       return draggedRequest.collectionId !== null || draggedRequest.folderId !== null;
     }
 
-    return draggedRequest.collectionId !== targetCollectionId || draggedRequest.folderId !== null;
+    const targetPlacement = getDropPlacement(targetCollectionId);
+    return (
+      draggedRequest.collectionId !== targetPlacement.collectionId ||
+      draggedRequest.folderId !== targetPlacement.folderId
+    );
   }
 
   function handleRequestDragStart(event: React.DragEvent, request: RequestRecord) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", request.id);
     setDraggedRequestId(request.id);
-    setDropTargetCollectionId(null);
+    setDropTargetItemId(null);
     setIsDropTargetRoot(false);
   }
 
@@ -370,7 +425,7 @@ export function Sidebar({
 
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    setDropTargetCollectionId(targetCollectionId);
+    setDropTargetItemId(targetCollectionId);
     setIsDropTargetRoot(false);
   }
 
@@ -391,7 +446,7 @@ export function Sidebar({
 
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    setDropTargetCollectionId(null);
+    setDropTargetItemId(null);
     setIsDropTargetRoot(true);
   }
 
@@ -414,15 +469,20 @@ export function Sidebar({
 
   function openCollectionMenu(event: React.MouseEvent, collection: CollectionRecord) {
     event.preventDefault();
+    const renameLabel = collection.kind === "folder" ? "Rename Folder" : "Rename Collection";
+    const deleteLabel = collection.kind === "folder" ? "Delete Folder" : "Delete Collection";
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
       items: [
         { label: "Add Request", icon: <PlusIcon />, onClick: () => startCreateRequest(collection.id) },
-        { label: "Export Collection", icon: <ArrowIcon />, onClick: () => onExportCollection(collection.id) },
+        { label: "Add Folder", icon: <FolderIcon />, onClick: () => startCreateFolder(collection.id) },
         { label: "Import cURL", icon: <CurlIcon />, onClick: () => onImportCurl(collection.id) },
-        { label: "Rename Collection", icon: <EditIcon />, onClick: () => startRenameCollection(collection) },
-        { label: "Delete Collection", icon: <TrashIcon />, onClick: () => onDeleteCollection(collection.id) },
+        ...(collection.kind === "collection"
+          ? [{ label: "Export Collection", icon: <ArrowIcon />, onClick: () => onExportCollection(collection.id) }]
+          : []),
+        { label: renameLabel, icon: <EditIcon />, onClick: () => startRenameCollection(collection) },
+        { label: deleteLabel, icon: <TrashIcon />, onClick: () => onDeleteCollection(collection.id) },
       ],
     });
   }
@@ -432,8 +492,8 @@ export function Sidebar({
     setContextMenu({ x: event.clientX, y: event.clientY, items: workspaceMenuItems });
   }
 
-  function renderCreateInput(targetCollectionId: string | null) {
-    if (createState?.type !== "request" || createState.collectionId !== targetCollectionId) {
+  function renderRequestCreateInput(targetCollectionId: string | null) {
+    if (createState?.type !== "request" || createState.targetId !== targetCollectionId) {
       return null;
     }
 
@@ -443,6 +503,32 @@ export function Sidebar({
         <input
           className="pm-input text-xs py-0.5 px-1.5 bg-pm-bg-input flex-1"
           placeholder="Request name..."
+          value={draftName}
+          onChange={(e) => setDraftName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") confirmCreate();
+            if (e.key === "Escape") cancelCreate();
+          }}
+          onBlur={confirmCreate}
+          autoFocus
+        />
+      </div>
+    );
+  }
+
+  function renderFolderCreateInput(parentId: string) {
+    if (createState?.type !== "folder" || createState.parentId !== parentId) {
+      return null;
+    }
+
+    return (
+      <div className="flex items-center gap-1.5 py-1 px-2">
+        <span className="w-4 h-4 flex items-center justify-center text-pm-text-t shrink-0">
+          <FolderIcon />
+        </span>
+        <input
+          className="pm-input text-xs py-0.5 px-1.5 bg-pm-bg-input flex-1"
+          placeholder="Folder name..."
           value={draftName}
           onChange={(e) => setDraftName(e.target.value)}
           onKeyDown={(e) => {
@@ -526,17 +612,29 @@ export function Sidebar({
 
   function renderFolderNode(node: FolderNode) {
     const isExpanded = normalizedQuery ? true : isCollectionExpanded(node.folder.id);
+    const isSelected = selectedCollectionId === node.folder.id;
+    const isRenamingCollection = renamingCollectionId === node.folder.id;
     const hasChildren = node.folders.length > 0 || node.requests.length > 0;
 
     return (
       <div key={node.folder.id} className="space-y-1">
         <div
-          className="flex items-center gap-1.5 py-1 px-1 rounded text-[13px] text-pm-text transition-colors duration-150 hover:bg-pm-hover"
-          onClick={() => {
-            if (hasChildren) {
-              setCollectionExpanded(node.folder.id, !isExpanded);
+          className={`group flex items-center gap-1.5 py-1 px-1 rounded text-[13px] text-pm-text transition-colors duration-150 ${
+            dropTargetItemId === node.folder.id
+              ? "bg-pm-active ring-1 ring-pm-orange"
+              : isSelected
+                ? "bg-pm-active"
+                : "hover:bg-pm-hover"
+          }`}
+          onClick={() => onSelectCollection(node.folder)}
+          onDragOver={(event) => handleCollectionDragOver(event, node.folder.id)}
+          onDragLeave={() => {
+            if (dropTargetItemId === node.folder.id) {
+              setDropTargetItemId(null);
             }
           }}
+          onDrop={(event) => handleCollectionDrop(event, node.folder.id)}
+          onContextMenu={(event) => openCollectionMenu(event, node.folder)}
         >
           <button
             className={`w-3.5 h-3.5 flex items-center justify-center text-pm-text-t text-[10px] shrink-0 transition-transform duration-150 ${
@@ -555,15 +653,63 @@ export function Sidebar({
           <span className="w-4 h-4 flex items-center justify-center text-pm-text-t shrink-0">
             <FolderIcon />
           </span>
-          <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-            {node.folder.name}
-          </span>
+          {isRenamingCollection ? (
+            <input
+              className="pm-input text-xs py-0.5 px-1.5 bg-pm-bg-input min-w-0 flex-1"
+              value={collectionRenameDraft}
+              onChange={(e) => setCollectionRenameDraft(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onBlur={() => confirmRenameCollection(node.folder)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  confirmRenameCollection(node.folder);
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelRenameCollection();
+                }
+              }}
+              autoFocus
+            />
+          ) : (
+            <span
+              className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                startRenameCollection(node.folder);
+              }}
+            >
+              {node.folder.name}
+            </span>
+          )}
+          <button
+            className="w-5 h-5 flex items-center justify-center rounded text-pm-text-t opacity-0 group-hover:opacity-100 hover:bg-pm-hover hover:text-pm-text transition-all duration-150"
+            onClick={(event) => {
+              event.stopPropagation();
+              startCreateRequest(node.folder.id);
+            }}
+            type="button"
+            title="New Request in Folder"
+          >
+            <PlusIcon small />
+          </button>
         </div>
 
         {isExpanded && (
           <div className="ml-3 pl-4 space-y-1 border-l border-pm-border-s/70">
+            {renderFolderCreateInput(node.folder.id)}
+            {renderRequestCreateInput(node.folder.id)}
             {node.folders.map(renderFolderNode)}
             {node.requests.map(renderRequestRow)}
+            {node.folders.length === 0 &&
+              node.requests.length === 0 &&
+              createState?.type !== "folder" &&
+              !(createState?.type === "request" && createState.targetId === node.folder.id) &&
+              normalizedQuery.length === 0 && (
+                <div className="py-1 px-2 text-[11px] text-pm-text-t">No requests yet</div>
+              )}
           </div>
         )}
       </div>
@@ -579,7 +725,7 @@ export function Sidebar({
             className="w-[26px] h-[26px] flex items-center justify-center rounded text-pm-text-s hover:bg-pm-hover hover:text-pm-text transition-all duration-150"
             onClick={() => startCreateRequest(selectedCollectionId)}
             type="button"
-            title={selectedCollectionId ? "New Request in Collection" : "New Request"}
+            title={selectedItem ? `New Request in ${selectedItem.kind === "folder" ? "Folder" : "Collection"}` : "New Request"}
           >
             <PlusIcon />
           </button>
@@ -602,13 +748,13 @@ export function Sidebar({
           <button
             className="w-[26px] h-[26px] flex items-center justify-center rounded text-pm-text-s hover:bg-pm-hover hover:text-pm-text transition-all duration-150 disabled:opacity-40 disabled:hover:bg-transparent"
             onClick={() => {
-              if (selectedCollection) {
-                onExportCollection(selectedCollection.id);
+              if (canExportSelectedCollection && selectedItem) {
+                onExportCollection(selectedItem.id);
               }
             }}
             type="button"
             title="Export Selected Collection"
-            disabled={!selectedCollection}
+            disabled={!canExportSelectedCollection}
           >
             <ArrowIcon />
           </button>
@@ -701,7 +847,7 @@ export function Sidebar({
                   <div key={node.collection.id} className="mb-0.5">
                     <div
                       className={`group flex items-center gap-1.5 py-1 px-1 rounded cursor-pointer text-[13px] transition-colors duration-150 ${
-                        dropTargetCollectionId === node.collection.id
+                        dropTargetItemId === node.collection.id
                           ? "bg-pm-active ring-1 ring-pm-orange"
                           : isSelected
                             ? "bg-pm-active"
@@ -710,8 +856,8 @@ export function Sidebar({
                       onClick={() => onSelectCollection(node.collection)}
                       onDragOver={(event) => handleCollectionDragOver(event, node.collection.id)}
                       onDragLeave={() => {
-                        if (dropTargetCollectionId === node.collection.id) {
-                          setDropTargetCollectionId(null);
+                        if (dropTargetItemId === node.collection.id) {
+                          setDropTargetItemId(null);
                         }
                       }}
                       onDrop={(event) => handleCollectionDrop(event, node.collection.id)}
@@ -780,12 +926,14 @@ export function Sidebar({
 
                     {isExpanded && (
                       <div className="ml-3 pl-4 pt-1 space-y-1 border-l border-pm-border-s/70">
-                        {renderCreateInput(node.collection.id)}
+                        {renderFolderCreateInput(node.collection.id)}
+                        {renderRequestCreateInput(node.collection.id)}
                         {node.folders.map(renderFolderNode)}
                         {node.requests.map(renderRequestRow)}
                         {node.folders.length === 0 &&
                           node.requests.length === 0 &&
-                          !(createState?.type === "request" && createState.collectionId === node.collection.id) &&
+                          createState?.type !== "folder" &&
+                          !(createState?.type === "request" && createState.targetId === node.collection.id) &&
                           normalizedQuery.length === 0 && (
                             <div className="py-1 px-2 text-[11px] text-pm-text-t">No requests yet</div>
                           )}
@@ -796,7 +944,7 @@ export function Sidebar({
               })}
 
               <div className="pl-4 pt-1 space-y-1">
-                {renderCreateInput(null)}
+                {renderRequestCreateInput(null)}
                 {rootRequests.map(renderRequestRow)}
               </div>
 

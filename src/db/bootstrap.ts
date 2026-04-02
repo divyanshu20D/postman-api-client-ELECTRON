@@ -101,6 +101,10 @@ export function initializeDatabase() {
     );
   `);
 
+  ensureColumn('collections', 'parent_id', 'text');
+  ensureColumn('collections', 'kind', "text NOT NULL DEFAULT 'collection'");
+  ensureColumn('collections', 'sort_order', 'integer NOT NULL DEFAULT 0');
+  ensureColumn('requests', 'folder_id', 'text');
   ensureColumn('requests', 'body_type', 'text');
   ensureColumn('requests', 'body_meta', 'text');
 

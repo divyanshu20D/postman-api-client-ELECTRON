@@ -13,7 +13,7 @@ import { getAppBootstrap } from '../modules/collections/bootstrap-service';
 import { createCollection, deleteCollection, listCollections, updateCollection } from '../modules/collections/collection-service';
 import {
   exportReqKitCollectionToFile,
-  importReqKitCollectionFromFile,
+  importCollectionFromFile,
 } from '../modules/collections/collection-transfer-service';
 import {
   createEnvironment,
@@ -100,7 +100,15 @@ export function registerAppIpc(ipcMain: IpcMain) {
       properties: ['openFile'],
       filters: [
         {
+          name: 'Collection JSON',
+          extensions: ['json'],
+        },
+        {
           name: 'ReqKit Collection',
+          extensions: ['json'],
+        },
+        {
+          name: 'Postman Collection',
           extensions: ['json'],
         },
       ],
@@ -110,7 +118,7 @@ export function registerAppIpc(ipcMain: IpcMain) {
       return null;
     }
 
-    return importReqKitCollectionFromFile(result.filePaths[0]);
+    return importCollectionFromFile(result.filePaths[0]);
   });
 
   // Requests

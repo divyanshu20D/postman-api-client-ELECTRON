@@ -40,14 +40,23 @@ function generateTabId(): string {
 
 const EMPTY_METHOD: HttpMethod = "GET";
 
+interface RequestPlacement {
+  collectionId: string | null;
+  folderId: string | null;
+  selectedItemId: string | null;
+  label: string;
+}
+
 function createDraft(
   workspaceId: string,
   name?: string,
   collectionId: string | null = null,
+  folderId: string | null = null,
 ): SaveRequestDraftInput {
   return {
     workspaceId,
     collectionId,
+    folderId,
     name: name ?? "Untitled Request",
     method: EMPTY_METHOD,
     url: "",
@@ -78,6 +87,105 @@ function createTab(
   };
 }
 
+function findCollectionById(
+  collections: CollectionRecord[],
+  collectionId: string | null | undefined,
+) {
+  if (!collectionId) {
+    return null;
+  }
+
+  return collections.find((item) => item.id === collectionId) ?? null;
+}
+
+function findParentCollectionId(
+  collections: CollectionRecord[],
+  itemId: string | null | undefined,
+): string | null {
+  let current = findCollectionById(collections, itemId);
+
+  while (current?.kind === "folder" && current.parentId) {
+    current = findCollectionById(collections, current.parentId);
+  }
+
+  return current?.kind === "collection" ? current.id : null;
+}
+
+function resolveRequestPlacement(
+  collections: CollectionRecord[],
+  targetId: string | null | undefined,
+): RequestPlacement {
+  const target = findCollectionById(collections, targetId);
+  if (!target) {
+    return {
+      collectionId: null,
+      folderId: null,
+      selectedItemId: null,
+      label: "Requests",
+    };
+  }
+
+  if (target.kind === "collection") {
+    return {
+      collectionId: target.id,
+      folderId: null,
+      selectedItemId: target.id,
+      label: target.name,
+    };
+  }
+
+  const collectionId = findParentCollectionId(collections, target.id);
+  return {
+    collectionId,
+    folderId: collectionId ? target.id : null,
+    selectedItemId: collectionId ? target.id : collectionId,
+    label: target.name,
+  };
+}
+
+function getDescendantFolderIds(
+  collections: CollectionRecord[],
+  parentId: string,
+): string[] {
+  const directChildren = collections
+    .filter((item) => item.kind === "folder" && item.parentId === parentId)
+    .map((item) => item.id);
+
+  return directChildren.flatMap((childId) => [
+    childId,
+    ...getDescendantFolderIds(collections, childId),
+  ]);
+}
+
+function getDeletedCollectionIds(
+  collections: CollectionRecord[],
+  collectionId: string,
+): string[] {
+  return [collectionId, ...getDescendantFolderIds(collections, collectionId)];
+}
+
+function getDeletedRequestIds(
+  collections: CollectionRecord[],
+  requests: RequestRecord[],
+  collectionId: string,
+): string[] {
+  const target = findCollectionById(collections, collectionId);
+  if (!target) {
+    return [];
+  }
+
+  if (target.kind === "collection") {
+    return requests
+      .filter((request) => request.collectionId === target.id)
+      .map((request) => request.id);
+  }
+
+  const deletedFolderIds = new Set(getDeletedCollectionIds(collections, collectionId));
+  return requests
+    .filter((request) => request.folderId !== null && deletedFolderIds.has(request.folderId))
+    .map((request) => request.id);
+}
+
 export function App() {
   const [bootstrap, setBootstrap] = useState<AppBootstrap | null>(null);
   const [tabs, setTabs] = useState<RequestTab[]>([]);
@@ -88,7 +196,7 @@ export function App() {
   const [activeRail, setActiveRail] = useState<RailTab>("collections");
   const [showCurlModal, setShowCurlModal] = useState(false);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
-  const [importTargetCollectionId, setImportTargetCollectionId] = useState<string | null>(null);
+  const [importTargetItemId, setImportTargetItemId] = useState<string | null>(null);
 
   const activeTab = tabs.find((tab) => tab.tabId === activeTabId) ?? null;
   const draft = activeTab?.draft ?? null;
@@ -104,7 +212,7 @@ export function App() {
       setTabs([tab]);
       setActiveTabId(tab.tabId);
       setSelectedCollectionId(
-        initial?.collectionId ?? data.collections.find((item) => item.kind === "collection")?.id ?? null,
+        initial?.folderId ?? initial?.collectionId ?? data.collections.find((item) => item.kind === "collection")?.id ?? null,
       );
       setStatus("Ready");
     });
@@ -375,15 +483,21 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleSave, handleSend]);
 
-  async function handleNewRequest(name?: string, collectionId: string | null = selectedCollectionId) {
+  async function handleNewRequest(name?: string, targetId: string | null = selectedCollectionId) {
     if (!bootstrap) return;
-    const newDraft = createDraft(bootstrap.workspace.id, name, collectionId);
+    const placement = resolveRequestPlacement(bootstrap.collections, targetId);
+    const newDraft = createDraft(
+      bootstrap.workspace.id,
+      name,
+      placement.collectionId,
+      placement.folderId,
+    );
     const saved = await window.appApi.saveRequestDraft(newDraft);
     const requests = await window.appApi.listRequests();
     setBootstrap({ ...bootstrap, requests });
     const tab = createTab(requestToDraft(saved), saved.id);
     addTab(tab);
-    setSelectedCollectionId(saved.collectionId);
+    setSelectedCollectionId(saved.folderId ?? saved.collectionId);
     setStatus("New request");
   }
 
@@ -405,6 +519,32 @@ export function App() {
     setBootstrap({ ...bootstrap, collections });
     setSelectedCollectionId(created.id);
     setStatus(`Collection created: ${created.name}`);
+  }
+
+  async function handleNewFolder(name: string, parentId: string) {
+    if (!bootstrap) return;
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    const parent = bootstrap.collections.find((item) => item.id === parentId);
+    if (!parent) {
+      return;
+    }
+
+    setStatus("Creating folder...");
+    const created = await window.appApi.createCollection({
+      workspaceId: bootstrap.workspace.id,
+      parentId: parent.id,
+      name: trimmedName,
+      kind: "folder",
+    });
+    const collections = await window.appApi.listCollections();
+    setBootstrap({ ...bootstrap, collections });
+    setSelectedCollectionId(created.id);
+    setStatus(`Folder created: ${created.name}`);
   }
 
   async function handleExportCollection(collectionId: string) {
@@ -460,10 +600,14 @@ export function App() {
   async function handleImportCurl(curlText: string) {
     if (!bootstrap) return;
     const parsed = parseCurl(curlText);
-    const targetCollectionId = importTargetCollectionId ?? selectedCollectionId;
+    const placement = resolveRequestPlacement(
+      bootstrap.collections,
+      importTargetItemId ?? selectedCollectionId,
+    );
     const importedDraft: SaveRequestDraftInput = {
       workspaceId: bootstrap.workspace.id,
-      collectionId: targetCollectionId,
+      collectionId: placement.collectionId,
+      folderId: placement.folderId,
       name: extractNameFromUrl(parsed.url),
       method: parsed.method,
       url: parsed.url,
@@ -480,8 +624,8 @@ export function App() {
     setBootstrap({ ...bootstrap, requests });
     const tab = createTab(requestToDraft(saved), saved.id);
     addTab(tab);
-    setSelectedCollectionId(saved.collectionId);
-    setImportTargetCollectionId(null);
+    setSelectedCollectionId(saved.folderId ?? saved.collectionId);
+    setImportTargetItemId(null);
     setShowCurlModal(false);
     setStatus("Imported from cURL");
   }
@@ -534,12 +678,20 @@ export function App() {
     setStatus(`Renamed to ${saved.name}`);
   }
 
-  async function handleMoveRequest(requestId: string, targetCollectionId: string | null) {
+  async function handleMoveRequest(requestId: string, targetId: string | null) {
     if (!bootstrap) return;
 
     const request = bootstrap.requests.find((item) => item.id === requestId);
     const openTab = tabs.find((tab) => tab.savedRequestId === requestId);
-    if (!request || request.collectionId === targetCollectionId) {
+    if (!request) {
+      return;
+    }
+
+    const placement = resolveRequestPlacement(bootstrap.collections, targetId);
+    if (
+      request.collectionId === placement.collectionId &&
+      request.folderId === placement.folderId
+    ) {
       return;
     }
 
@@ -547,8 +699,8 @@ export function App() {
     const saved = await window.appApi.saveRequestDraft({
       id: request.id,
       workspaceId: sourceDraft.workspaceId,
-      collectionId: targetCollectionId,
-      folderId: null,
+      collectionId: placement.collectionId,
+      folderId: placement.folderId,
       name: sourceDraft.name,
       method: sourceDraft.method,
       url: sourceDraft.url,
@@ -570,19 +722,15 @@ export function App() {
               ...tab,
               draft: {
                 ...tab.draft,
-                collectionId: targetCollectionId,
-                folderId: null,
+                collectionId: placement.collectionId,
+                folderId: placement.folderId,
               },
             }
           : tab,
       ),
     );
-    setSelectedCollectionId(targetCollectionId);
-
-    const targetLabel = targetCollectionId
-      ? bootstrap.collections.find((collection) => collection.id === targetCollectionId)?.name ?? "Collection"
-      : "Requests";
-    setStatus(`Moved ${saved.name} to ${targetLabel}`);
+    setSelectedCollectionId(placement.selectedItemId);
+    setStatus(`Moved ${saved.name} to ${placement.label}`);
   }
 
   async function handleRenameCollection(collectionId: string, nextName: string) {
@@ -594,14 +742,14 @@ export function App() {
       return;
     }
 
-    setStatus("Renaming collection...");
+    setStatus(collection.kind === "folder" ? "Renaming folder..." : "Renaming collection...");
     const saved = await window.appApi.updateCollection({
       id: collectionId,
       name: trimmedName,
     });
     const collections = await window.appApi.listCollections();
     setBootstrap({ ...bootstrap, collections });
-    setStatus(`Renamed collection to ${saved.name}`);
+    setStatus(`${collection.kind === "folder" ? "Renamed folder" : "Renamed collection"} to ${saved.name}`);
   }
 
   async function handleDeleteRequest(requestId: string) {
@@ -632,22 +780,26 @@ export function App() {
       return;
     }
 
-    const deletedRequestIds = bootstrap.requests
-      .filter((request) => request.collectionId === collectionId)
-      .map((request) => request.id);
+    const deletedCollectionIds = getDeletedCollectionIds(bootstrap.collections, collectionId);
+    const deletedRequestIds = getDeletedRequestIds(
+      bootstrap.collections,
+      bootstrap.requests,
+      collectionId,
+    );
+    const itemLabel = collection.kind === "folder" ? "folder" : "collection";
     const confirmed = window.confirm(
-      `Delete collection "${collection.name}" and its ${deletedRequestIds.length} request${deletedRequestIds.length === 1 ? "" : "s"}?`,
+      `Delete ${itemLabel} "${collection.name}" and its ${deletedRequestIds.length} request${deletedRequestIds.length === 1 ? "" : "s"}?`,
     );
     if (!confirmed) {
       return;
     }
 
-    setStatus("Deleting collection...");
+    setStatus(`Deleting ${itemLabel}...`);
     const result = await window.appApi.deleteCollection(collectionId);
     removeTabsForRequests(deletedRequestIds);
     const refreshed = await refreshBootstrap();
 
-    if (selectedCollectionId === collectionId) {
+    if (selectedCollectionId && deletedCollectionIds.includes(selectedCollectionId)) {
       setSelectedCollectionId(
         refreshed.collections.find((item) => item.kind === "collection")?.id ?? null,
       );
@@ -659,7 +811,7 @@ export function App() {
   }
 
   function handleSelectRequest(request: RequestRecord) {
-    setSelectedCollectionId(request.collectionId);
+    setSelectedCollectionId(request.folderId ?? request.collectionId);
     const existing = tabs.find((tab) => tab.savedRequestId === request.id);
     if (existing) {
       setActiveTabId(existing.tabId);
@@ -897,10 +1049,15 @@ export function App() {
             historyCount={bootstrap.history.length}
             environmentCount={bootstrap.environments.length}
             onNewCollection={(name) => void handleNewCollection(name)}
+            onNewFolder={(name, parentId) => void handleNewFolder(name, parentId)}
             onImportCollection={() => void handleImportCollection()}
             onSelectCollection={(collection: CollectionRecord | null) => {
               setSelectedCollectionId(collection?.id ?? null);
-              setStatus(collection ? `Selected collection: ${collection.name}` : "Showing requests outside collections");
+              setStatus(
+                collection
+                  ? `Selected ${collection.kind === "folder" ? "folder" : "collection"}: ${collection.name}`
+                  : "Showing requests outside collections",
+              );
             }}
             onNewRequest={(name, collectionId) => handleNewRequest(name, collectionId)}
             onMoveRequest={(requestId, collectionId) =>
@@ -916,7 +1073,7 @@ export function App() {
               void handleExportCollection(collectionId)
             }
             onImportCurl={(collectionId) => {
-              setImportTargetCollectionId(collectionId ?? null);
+              setImportTargetItemId(collectionId ?? null);
               setShowCurlModal(true);
             }}
             onRenameRequest={(requestId, name) =>
@@ -1095,7 +1252,7 @@ export function App() {
         <ImportCurlModal
           onImport={handleImportCurl}
           onClose={() => {
-            setImportTargetCollectionId(null);
+            setImportTargetItemId(null);
             setShowCurlModal(false);
           }}
         />

@@ -62,11 +62,6 @@ interface PostmanItem {
   };
 }
 
-interface ImportResult {
-  collectionName: string;
-  requestCount: number;
-}
-
 interface NativeExportedFolder {
   id: string;
   parentId: string;
@@ -475,19 +470,109 @@ function buildUrlFromPostman(url: PostmanItem['request']['url']) {
   return `${protocol}${host}${pathname}${queryString}`;
 }
 
+function serializeQueryParams(rows: Array<{ key: string; value: string; enabled: boolean }>) {
+  return JSON.stringify(rows, null, 2);
+}
+
+function splitUrlAndQueryParams(rawUrl: string) {
+  try {
+    const parsed = new URL(rawUrl);
+    const queryParams = Array.from(parsed.searchParams.entries()).map(([key, value]) => ({
+      key,
+      value,
+      enabled: true,
+    }));
+    parsed.search = '';
+    return {
+      url: parsed.toString(),
+      queryParams: serializeQueryParams(queryParams),
+    };
+  } catch {
+    return {
+      url: rawUrl,
+      queryParams: '[]',
+    };
+  }
+}
+
+function buildUrlDraftFromPostman(url: PostmanItem['request']['url']) {
+  if (!url) {
+    return {
+      url: '',
+      queryParams: '[]',
+    };
+  }
+
+  if (typeof url === 'string') {
+    return splitUrlAndQueryParams(url);
+  }
+
+  if (url.query?.length) {
+    const protocol = url.protocol ? `${url.protocol}://` : '';
+    const host = url.host?.join('.') ?? '';
+    const pathname = url.path?.length ? `/${url.path.join('/')}` : '';
+    const baseUrl = url.raw
+      ? splitUrlAndQueryParams(url.raw).url
+      : `${protocol}${host}${pathname}`;
+
+    return {
+      url: baseUrl,
+      queryParams: serializeQueryParams(
+        url.query
+          .filter((item) => item.key)
+          .map((item) => ({
+            key: item.key ?? '',
+            value: item.value ?? '',
+            enabled: !item.disabled,
+          })),
+      ),
+    };
+  }
+
+  const rawUrl = buildUrlFromPostman(url);
+  return splitUrlAndQueryParams(rawUrl);
+}
+
+function normalizePostmanAuthEntries(
+  entries: unknown,
+): Array<{ key?: string; value?: string }> {
+  if (Array.isArray(entries)) {
+    return entries
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry) => {
+        const candidate = entry as { key?: unknown; value?: unknown };
+        return {
+          key: typeof candidate.key === 'string' ? candidate.key : undefined,
+          value: typeof candidate.value === 'string' ? candidate.value : undefined,
+        };
+      });
+  }
+
+  if (entries && typeof entries === 'object') {
+    return Object.entries(entries as Record<string, unknown>).map(([key, value]) => ({
+      key,
+      value: typeof value === 'string' ? value : value == null ? undefined : String(value),
+    }));
+  }
+
+  return [];
+}
+
 function parsePostmanAuth(item: NonNullable<PostmanItem['request']>['auth']) {
   if (!item?.type) {
     return { authType: null, authConfig: null };
   }
 
   if (item.type === 'bearer') {
-    const token = item.bearer?.find((entry) => entry.key === 'token')?.value ?? null;
+    const bearerEntries = normalizePostmanAuthEntries((item as { bearer?: unknown }).bearer);
+    const token = bearerEntries.find((entry) => entry.key === 'token')?.value ?? null;
     return { authType: token ? 'bearer' : null, authConfig: token };
   }
 
   if (item.type === 'basic') {
-    const username = item.basic?.find((entry) => entry.key === 'username')?.value ?? '';
-    const password = item.basic?.find((entry) => entry.key === 'password')?.value ?? '';
+    const basicEntries = normalizePostmanAuthEntries((item as { basic?: unknown }).basic);
+    const username = basicEntries.find((entry) => entry.key === 'username')?.value ?? '';
+    const password = basicEntries.find((entry) => entry.key === 'password')?.value ?? '';
     return {
       authType: 'basic',
       authConfig: JSON.stringify({ username, password }),
@@ -495,9 +580,10 @@ function parsePostmanAuth(item: NonNullable<PostmanItem['request']>['auth']) {
   }
 
   if (item.type === 'apikey') {
-    const key = item.apikey?.find((entry) => entry.key === 'key')?.value ?? '';
-    const value = item.apikey?.find((entry) => entry.key === 'value')?.value ?? '';
-    const addTo = item.apikey?.find((entry) => entry.key === 'in')?.value ?? 'header';
+    const apiKeyEntries = normalizePostmanAuthEntries((item as { apikey?: unknown }).apikey);
+    const key = apiKeyEntries.find((entry) => entry.key === 'key')?.value ?? '';
+    const value = apiKeyEntries.find((entry) => entry.key === 'value')?.value ?? '';
+    const addTo = apiKeyEntries.find((entry) => entry.key === 'in')?.value ?? 'header';
     return {
       authType: 'apikey',
       authConfig: JSON.stringify({ key, value, addTo }),
@@ -587,31 +673,10 @@ function mapImportedBody(body: NonNullable<PostmanItem['request']>['body']) {
   };
 }
 
-function flattenPostmanItems(items: PostmanItem[], parentNames: string[] = []): Array<{ name: string; request: NonNullable<PostmanItem['request']> }> {
-  const results: Array<{ name: string; request: NonNullable<PostmanItem['request']> }> = [];
-
-  for (const item of items) {
-    const nextParents = item.request ? parentNames : [...parentNames, item.name ?? 'Folder'];
-
-    if (item.request) {
-      results.push({
-        name: [...parentNames, item.name ?? 'Imported Request'].filter(Boolean).join(' / '),
-        request: item.request,
-      });
-    }
-
-    if (item.item?.length) {
-      results.push(...flattenPostmanItems(item.item, nextParents));
-    }
-  }
-
-  return results;
-}
-
-export async function importReqKitCollectionFromFile(filePath: string): Promise<ImportCollectionResult> {
-  const workspaceId = getActiveWorkspaceId();
-  const raw = await readFile(filePath, 'utf8');
-  const parsed = nativeCollectionTransferSchema.parse(JSON.parse(raw));
+async function importReqKitCollectionFromParsed(
+  workspaceId: string,
+  parsed: NativeCollectionTransferFile,
+): Promise<ImportCollectionResult> {
   const createdCollection = createCollection({
     workspaceId,
     name: parsed.collection.name,
@@ -669,20 +734,51 @@ export async function importReqKitCollectionFromFile(filePath: string): Promise<
   };
 }
 
-export async function importCollectionFromFile(filePath: string): Promise<ImportResult> {
+export async function importReqKitCollectionFromFile(filePath: string): Promise<ImportCollectionResult> {
   const workspaceId = getActiveWorkspaceId();
   const raw = await readFile(filePath, 'utf8');
-  const parsed = JSON.parse(raw) as PostmanCollection;
-  const collectionName = parsed.info?.name?.trim() || path.basename(filePath, path.extname(filePath));
-  const createdCollection = createCollection({
-    workspaceId,
-    name: collectionName,
-    kind: 'collection',
-  });
+  const parsed = nativeCollectionTransferSchema.parse(JSON.parse(raw));
+  return importReqKitCollectionFromParsed(workspaceId, parsed);
+}
 
-  const items = flattenPostmanItems(parsed.item ?? []);
+async function importPostmanItems(
+  workspaceId: string,
+  collectionId: string,
+  items: PostmanItem[],
+  importedRequests: NativeExportedRequest[],
+  parentFolderId: string | null = null,
+): Promise<{ folderCount: number; requestCount: number }> {
+  let folderCount = 0;
+  let requestCount = 0;
 
   for (const item of items) {
+    if (item.item?.length) {
+      const createdFolder = createCollection({
+        workspaceId,
+        parentId: parentFolderId ?? collectionId,
+        name: item.name?.trim() || 'Folder',
+        kind: 'folder',
+      });
+
+      folderCount += 1;
+
+      const nestedCounts = await importPostmanItems(
+        workspaceId,
+        collectionId,
+        item.item,
+        importedRequests,
+        createdFolder.id,
+      );
+
+      folderCount += nestedCounts.folderCount;
+      requestCount += nestedCounts.requestCount;
+      continue;
+    }
+
+    if (!item.request) {
+      continue;
+    }
+
     const headers = (item.request.header ?? []).map((header) => ({
       key: header.key ?? '',
       value: header.value ?? '',
@@ -690,14 +786,16 @@ export async function importCollectionFromFile(filePath: string): Promise<Import
     }));
     const { authType, authConfig } = parsePostmanAuth(item.request.auth);
     const { bodyType, body, bodyMeta } = mapImportedBody(item.request.body);
+    const { url, queryParams } = buildUrlDraftFromPostman(item.request.url);
 
     saveRequestDraft({
       workspaceId,
-      collectionId: createdCollection.id,
-      name: item.name || 'Imported Request',
+      collectionId,
+      folderId: parentFolderId,
+      name: item.name?.trim() || 'Imported Request',
       method: ((item.request.method ?? 'GET').toUpperCase()) as RequestRecord['method'],
-      url: buildUrlFromPostman(item.request.url),
-      queryParams: '[]',
+      url,
+      queryParams,
       headers: JSON.stringify(headers, null, 2),
       bodyType,
       body,
@@ -705,10 +803,80 @@ export async function importCollectionFromFile(filePath: string): Promise<Import
       authType,
       authConfig,
     });
+
+    importedRequests.push({
+      id: randomUUID(),
+      folderId: parentFolderId,
+      name: item.name?.trim() || 'Imported Request',
+      method: ((item.request.method ?? 'GET').toUpperCase()) as RequestRecord['method'],
+      url,
+      queryParams,
+      headers: JSON.stringify(headers, null, 2),
+      bodyType,
+      body,
+      bodyMeta,
+      authType,
+      authConfig,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    requestCount += 1;
   }
 
+  return { folderCount, requestCount };
+}
+
+async function importPostmanCollectionFromParsed(
+  workspaceId: string,
+  filePath: string,
+  parsed: PostmanCollection,
+): Promise<ImportCollectionResult> {
+  const collectionName = parsed.info?.name?.trim() || path.basename(filePath, path.extname(filePath));
+  const createdCollection = createCollection({
+    workspaceId,
+    name: collectionName,
+    kind: 'collection',
+  });
+  const importedRequests: NativeExportedRequest[] = [];
+  const { folderCount, requestCount } = await importPostmanItems(
+    workspaceId,
+    createdCollection.id,
+    parsed.item ?? [],
+    importedRequests,
+  );
+  const missingFileCount = await countMissingFileReferences(importedRequests);
+
   return {
+    collectionId: createdCollection.id,
     collectionName: createdCollection.name,
-    requestCount: items.length,
+    folderCount,
+    requestCount,
+    missingFileCount,
   };
+}
+
+function isPostmanCollection(value: unknown): value is PostmanCollection {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as PostmanCollection;
+  return Array.isArray(candidate.item);
+}
+
+export async function importCollectionFromFile(filePath: string): Promise<ImportCollectionResult> {
+  const workspaceId = getActiveWorkspaceId();
+  const raw = await readFile(filePath, 'utf8');
+  const parsedJson = JSON.parse(raw) as unknown;
+  const nativeCollection = nativeCollectionTransferSchema.safeParse(parsedJson);
+
+  if (nativeCollection.success) {
+    return importReqKitCollectionFromParsed(workspaceId, nativeCollection.data);
+  }
+
+  if (isPostmanCollection(parsedJson)) {
+    return importPostmanCollectionFromParsed(workspaceId, filePath, parsedJson);
+  }
+
+  throw new Error('Unsupported collection file. Please choose a ReqKit or Postman collection JSON file.');
 }

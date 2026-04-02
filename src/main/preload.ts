@@ -80,6 +80,15 @@ function sendRendererLog(payload: RendererLogInput) {
   });
 }
 
+sendRendererLog({
+  level: 'info',
+  message: 'Preload initialized',
+  details: {
+    href: window.location.href,
+    userAgent: navigator.userAgent,
+  },
+});
+
 window.addEventListener('error', (event) => {
   sendRendererLog({
     level: 'error',
