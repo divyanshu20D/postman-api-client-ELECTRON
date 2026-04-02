@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { db } from '../../db/connection';
-import { historyEntries } from '../../db/schema';
+import { historyEntries, variables } from '../../db/schema';
 import type { ExecuteRequestInput } from '../../shared/ipc';
 import type { BinaryBodyConfig, ExecutionResult, FormDataRow, KeyValueRow, RequestBodyType } from '../../shared/models';
 
@@ -37,6 +38,7 @@ class RequestTimeoutError extends Error {
  */
 export async function executeRequest(input: ExecuteRequestInput): Promise<ExecutionResult> {
   const controller = new AbortController();
+  const environmentVariables = getEnvironmentVariables(input.activeEnvironmentId);
   const execution: ActiveExecution = {
     controller,
     timeoutHandle: setTimeout(() => {
@@ -48,7 +50,9 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
   activeExecutions.set(input.executionId, execution);
 
   // Build headers
-  const headerRows = parseJson<HeaderRow[]>(input.headers, []);
+  const headerRows = parseJson<HeaderRow[]>(input.headers, []).map((row) =>
+    resolveKeyValueRow(row, environmentVariables),
+  );
   const headers = new Headers();
 
   for (const row of headerRows) {
@@ -59,10 +63,12 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
 
   // Apply auth
   if (input.authType === 'bearer' && input.authConfig) {
-    headers.set('Authorization', `Bearer ${input.authConfig}`);
+    headers.set('Authorization', `Bearer ${interpolateString(input.authConfig, environmentVariables)}`);
   } else if (input.authType === 'basic' && input.authConfig) {
     try {
-      const creds = JSON.parse(input.authConfig) as { username?: string; password?: string };
+      const creds = JSON.parse(
+        interpolateString(input.authConfig, environmentVariables),
+      ) as { username?: string; password?: string };
       const encoded = Buffer.from(`${creds.username ?? ''}:${creds.password ?? ''}`).toString('base64');
       headers.set('Authorization', `Basic ${encoded}`);
     } catch {
@@ -70,7 +76,9 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
     }
   } else if (input.authType === 'apikey' && input.authConfig) {
     try {
-      const config = JSON.parse(input.authConfig) as { key?: string; value?: string; addTo?: string };
+      const config = JSON.parse(
+        interpolateString(input.authConfig, environmentVariables),
+      ) as { key?: string; value?: string; addTo?: string };
       if (config.key && config.value) {
         headers.set(config.key, config.value);
       }
@@ -80,8 +88,10 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
   }
 
   // Build URL with query params
-  let finalUrl = input.url;
-  const queryRows = parseJson<HeaderRow[]>(input.queryParams, []);
+  let finalUrl = interpolateString(input.url, environmentVariables);
+  const queryRows = parseJson<HeaderRow[]>(input.queryParams, []).map((row) =>
+    resolveKeyValueRow(row, environmentVariables),
+  );
   const enabledParams = queryRows.filter((r) => r.enabled && r.key);
   if (enabledParams.length > 0) {
     try {
@@ -108,7 +118,7 @@ export async function executeRequest(input: ExecuteRequestInput): Promise<Execut
 
   try {
     if (!['GET', 'HEAD'].includes(input.method)) {
-      await applyRequestBody(fetchOptions, headers, input);
+      await applyRequestBody(fetchOptions, headers, input, environmentVariables);
     }
 
     const response = await fetch(finalUrl, fetchOptions);
@@ -206,6 +216,41 @@ function parseJson<T>(value: string, fallback: T): T {
   }
 }
 
+function getEnvironmentVariables(environmentId: string | null | undefined): Map<string, string> {
+  if (!environmentId) {
+    return new Map();
+  }
+
+  const environmentVariables = db
+    .select()
+    .from(variables)
+    .where(eq(variables.environmentId, environmentId))
+    .all();
+
+  return new Map(
+    environmentVariables.map((variable) => [variable.key.trim(), variable.value ?? '']),
+  );
+}
+
+function interpolateString(value: string | null | undefined, environmentVariables: Map<string, string>): string {
+  if (!value || environmentVariables.size === 0) {
+    return value ?? '';
+  }
+
+  return value.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, variableName: string) => {
+    const resolved = environmentVariables.get(variableName.trim());
+    return resolved ?? match;
+  });
+}
+
+function resolveKeyValueRow<T extends KeyValueRow>(row: T, environmentVariables: Map<string, string>): T {
+  return {
+    ...row,
+    key: interpolateString(row.key, environmentVariables),
+    value: interpolateString(row.value, environmentVariables),
+  };
+}
+
 function normalizeBodyType(bodyType: RequestBodyType | null | undefined, body: string | null | undefined): RequestBodyType {
   if (bodyType) {
     return bodyType;
@@ -214,7 +259,12 @@ function normalizeBodyType(bodyType: RequestBodyType | null | undefined, body: s
   return body ? 'raw' : 'none';
 }
 
-async function applyRequestBody(fetchOptions: RequestInit, headers: Headers, input: ExecuteRequestInput) {
+async function applyRequestBody(
+  fetchOptions: RequestInit,
+  headers: Headers,
+  input: ExecuteRequestInput,
+  environmentVariables: Map<string, string>,
+) {
   const bodyType = normalizeBodyType(input.bodyType, input.body);
 
   switch (bodyType) {
@@ -222,11 +272,13 @@ async function applyRequestBody(fetchOptions: RequestInit, headers: Headers, inp
       return;
     case 'raw':
       if (input.body) {
-        fetchOptions.body = input.body;
+        fetchOptions.body = interpolateString(input.body, environmentVariables);
       }
       return;
     case 'x-www-form-urlencoded': {
-      const bodyRows = parseJson<KeyValueRow[]>(input.bodyMeta ?? '[]', []);
+      const bodyRows = parseJson<KeyValueRow[]>(input.bodyMeta ?? '[]', []).map((row) =>
+        resolveKeyValueRow(row, environmentVariables),
+      );
       const searchParams = new URLSearchParams();
 
       for (const row of bodyRows) {
@@ -246,24 +298,33 @@ async function applyRequestBody(fetchOptions: RequestInit, headers: Headers, inp
       const formData = new FormData();
 
       for (const row of rows) {
-        if (!row.enabled || !row.key) {
+        const resolvedRow: FormDataRow = {
+          ...row,
+          key: interpolateString(row.key, environmentVariables),
+          value: interpolateString(row.value, environmentVariables),
+          filePath: row.filePath ? interpolateString(row.filePath, environmentVariables) : null,
+          fileName: row.fileName ? interpolateString(row.fileName, environmentVariables) : null,
+          contentType: row.contentType ? interpolateString(row.contentType, environmentVariables) : null,
+        };
+
+        if (!resolvedRow.enabled || !resolvedRow.key) {
           continue;
         }
 
-        if (row.kind === 'file') {
-          if (!row.filePath) {
+        if (resolvedRow.kind === 'file') {
+          if (!resolvedRow.filePath) {
             continue;
           }
 
-          const fileBuffer = await readFile(row.filePath);
+          const fileBuffer = await readFile(resolvedRow.filePath);
           const fileBlob = new Blob([fileBuffer], {
-            type: row.contentType ?? 'application/octet-stream',
+            type: resolvedRow.contentType ?? 'application/octet-stream',
           });
-          formData.append(row.key, fileBlob, row.fileName ?? 'upload.bin');
+          formData.append(resolvedRow.key, fileBlob, resolvedRow.fileName ?? 'upload.bin');
           continue;
         }
 
-        formData.append(row.key, row.value);
+        formData.append(resolvedRow.key, resolvedRow.value);
       }
 
       headers.delete('content-type');
@@ -272,14 +333,23 @@ async function applyRequestBody(fetchOptions: RequestInit, headers: Headers, inp
     }
     case 'binary': {
       const config = parseJson<BinaryBodyConfig | null>(input.bodyMeta ?? 'null', null);
-      if (!config?.filePath) {
+      const resolvedConfig = config
+        ? {
+            ...config,
+            filePath: config.filePath ? interpolateString(config.filePath, environmentVariables) : null,
+            fileName: config.fileName ? interpolateString(config.fileName, environmentVariables) : null,
+            contentType: config.contentType ? interpolateString(config.contentType, environmentVariables) : null,
+          }
+        : null;
+
+      if (!resolvedConfig?.filePath) {
         return;
       }
 
-      const fileBuffer = await readFile(config.filePath);
+      const fileBuffer = await readFile(resolvedConfig.filePath);
       fetchOptions.body = new Uint8Array(fileBuffer);
-      if (config.contentType && !headers.has('content-type')) {
-        headers.set('content-type', config.contentType);
+      if (resolvedConfig.contentType && !headers.has('content-type')) {
+        headers.set('content-type', resolvedConfig.contentType);
       }
       return;
     }

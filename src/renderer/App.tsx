@@ -7,6 +7,7 @@ import type {
   HttpMethod,
   RequestBodyType,
   RequestRecord,
+  VariableRecord,
 } from "@shared/models";
 import { EnvironmentsPanel } from "./components/EnvironmentsPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
@@ -81,6 +82,8 @@ export function App() {
   const [bootstrap, setBootstrap] = useState<AppBootstrap | null>(null);
   const [tabs, setTabs] = useState<RequestTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [activeEnvironmentId, setActiveEnvironmentId] = useState<string | null>(null);
+  const [activeEnvironmentVariables, setActiveEnvironmentVariables] = useState<VariableRecord[]>([]);
   const [status, setStatus] = useState<string>("Loading workspace...");
   const [activeRail, setActiveRail] = useState<RailTab>("collections");
   const [showCurlModal, setShowCurlModal] = useState(false);
@@ -93,6 +96,7 @@ export function App() {
   useEffect(() => {
     void window.appApi.getBootstrap().then((data) => {
       setBootstrap(data);
+      setActiveEnvironmentId(data.activeEnvironmentId);
       const initial = data.requests[0];
       const tab = initial
         ? createTab(requestToDraft(initial), initial.id)
@@ -105,6 +109,47 @@ export function App() {
       setStatus("Ready");
     });
   }, []);
+
+  useEffect(() => {
+    if (!bootstrap) {
+      return;
+    }
+
+    const nextActiveEnvironmentId = bootstrap.environments.some(
+      (environment) => environment.id === bootstrap.activeEnvironmentId,
+    )
+      ? bootstrap.activeEnvironmentId
+      : null;
+
+    setActiveEnvironmentId(nextActiveEnvironmentId);
+  }, [bootstrap]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!activeEnvironmentId) {
+      setActiveEnvironmentVariables([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void window.appApi.listVariables(activeEnvironmentId)
+      .then((variables) => {
+        if (!cancelled) {
+          setActiveEnvironmentVariables(variables);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setActiveEnvironmentVariables([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeEnvironmentId]);
 
   async function refreshBootstrap() {
     const data = await window.appApi.getBootstrap();
@@ -248,6 +293,7 @@ export function App() {
         headers: draft.headers,
         bodyType: draft.bodyType,
         body: draft.body,
+        activeEnvironmentId,
         bodyMeta: draft.bodyMeta,
         authType: draft.authType,
         authConfig: draft.authConfig,
@@ -658,6 +704,35 @@ export function App() {
     setStatus("History cleared");
   }
 
+  async function handleActiveEnvironmentChange(nextEnvironmentId: string | null) {
+    const previousEnvironmentId = activeEnvironmentId;
+    setActiveEnvironmentId(nextEnvironmentId);
+    if (!nextEnvironmentId) {
+      setActiveEnvironmentVariables([]);
+    }
+
+    try {
+      await window.appApi.setActiveEnvironment(nextEnvironmentId);
+      setBootstrap((prev) => (
+        prev
+          ? {
+              ...prev,
+              activeEnvironmentId: nextEnvironmentId,
+            }
+          : prev
+      ));
+
+      const environmentName = nextEnvironmentId
+        ? bootstrap?.environments.find((environment) => environment.id === nextEnvironmentId)?.name ?? "Environment"
+        : null;
+      setStatus(environmentName ? `Environment: ${environmentName}` : "No environment selected");
+    } catch (error) {
+      setActiveEnvironmentId(previousEnvironmentId);
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Failed to switch environment: ${message}`);
+    }
+  }
+
   if (!bootstrap || tabs.length === 0 || !draft) {
     return (
       <div className="h-screen grid place-items-center bg-pm-bg text-pm-text-s">
@@ -857,7 +932,49 @@ export function App() {
           <EnvironmentsPanel
             workspaceId={bootstrap.workspace.id}
             environments={bootstrap.environments}
-            onEnvironmentsChanged={() => void refreshBootstrap()}
+            onEnvironmentCreated={(environment) => {
+              setBootstrap((prev) => (
+                prev
+                  ? {
+                      ...prev,
+                      environments: [...prev.environments, environment],
+                    }
+                  : prev
+              ));
+            }}
+            onEnvironmentUpdated={(environment) => {
+              setBootstrap((prev) => (
+                prev
+                  ? {
+                      ...prev,
+                      environments: prev.environments.map((item) => (
+                        item.id === environment.id ? environment : item
+                      )),
+                    }
+                  : prev
+              ));
+            }}
+            onEnvironmentDeleted={(environmentId) => {
+              setActiveEnvironmentId((prev) => (prev === environmentId ? null : prev));
+              setBootstrap((prev) => (
+                prev
+                  ? {
+                      ...prev,
+                      activeEnvironmentId: prev.activeEnvironmentId === environmentId ? null : prev.activeEnvironmentId,
+                      environments: prev.environments.filter((item) => item.id !== environmentId),
+                    }
+                  : prev
+              ));
+            }}
+            onVariablesChanged={(environmentId) => {
+              if (environmentId !== activeEnvironmentId) {
+                return;
+              }
+
+              void window.appApi.listVariables(environmentId)
+                .then((variables) => setActiveEnvironmentVariables(variables))
+                .catch(() => setActiveEnvironmentVariables([]));
+            }}
           />
         )}
         {activeRail === "history" && (
@@ -920,8 +1037,12 @@ export function App() {
               +
             </button>
             <div className="ml-auto flex items-center px-2 gap-1.5 shrink-0">
-              <select className="pm-input w-auto px-2 py-0.5 rounded text-[11px] text-pm-text-t border-pm-border-s bg-transparent">
-                <option>No Environment</option>
+              <select
+                className="pm-input w-auto px-2 py-0.5 rounded text-[11px] text-pm-text-t border-pm-border-s bg-transparent"
+                value={activeEnvironmentId ?? ""}
+                onChange={(event) => void handleActiveEnvironmentChange(event.target.value || null)}
+              >
+                <option value="">No Environment</option>
                 {bootstrap.environments.map((env) => (
                   <option key={env.id} value={env.id}>
                     {env.name}
@@ -936,6 +1057,10 @@ export function App() {
               <RequestEditor
                 draft={draft}
                 loading={activeTab?.loading ?? false}
+                activeEnvironmentName={
+                  bootstrap.environments.find((environment) => environment.id === activeEnvironmentId)?.name ?? null
+                }
+                activeEnvironmentVariables={activeEnvironmentVariables}
                 onChange={handleDraftChange}
                 onSave={handleSave}
                 onSend={handleSend}

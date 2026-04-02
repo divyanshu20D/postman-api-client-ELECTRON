@@ -10,6 +10,7 @@ import type {
   PickFilesInput,
   SaveRequestDraftInput,
   SaveVariableInput,
+  SetActiveEnvironmentInput,
   UpdateCollectionInput,
   UpdateEnvironmentInput,
 } from '../shared/ipc';
@@ -53,6 +54,11 @@ const api: AppApi = {
     ipcRenderer.invoke('environments:update', input) as ReturnType<AppApi['updateEnvironment']>,
   deleteEnvironment: (id: string) =>
     ipcRenderer.invoke('environments:delete', id) as ReturnType<AppApi['deleteEnvironment']>,
+  setActiveEnvironment: (environmentId: string | null) =>
+    ipcRenderer.invoke(
+      'environments:set-active',
+      { environmentId } satisfies SetActiveEnvironmentInput,
+    ) as ReturnType<AppApi['setActiveEnvironment']>,
 
   // Variables
   listVariables: (environmentId: string) =>

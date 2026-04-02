@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SaveRequestDraftInput } from '@shared/ipc';
 import type {
   BinaryBodyConfig,
@@ -7,6 +7,7 @@ import type {
   KeyValueRow,
   PickedFile,
   RequestBodyType,
+  VariableRecord,
 } from '@shared/models';
 import { METHOD_SELECT_COLOR } from '../utils/method-colors';
 import {
@@ -24,10 +25,15 @@ const REQUEST_TABS = ['Params', 'Headers', 'Body', 'Auth', 'cURL'] as const;
 const BODY_TYPES: RequestBodyType[] = ['none', 'raw', 'form-data', 'x-www-form-urlencoded', 'binary'];
 
 type RequestTab = (typeof REQUEST_TABS)[number];
+type UrlPreviewSegment =
+  | { kind: 'text'; value: string }
+  | { kind: 'variable'; token: string; key: string; resolvedValue: string | null };
 
 interface RequestEditorProps {
   draft: SaveRequestDraftInput;
   loading: boolean;
+  activeEnvironmentName: string | null;
+  activeEnvironmentVariables: VariableRecord[];
   onChange(draft: SaveRequestDraftInput): void;
   onSave(): void;
   onSend(): void;
@@ -150,12 +156,23 @@ function extractNameFromUrl(url: string): string {
   }
 }
 
-export function RequestEditor({ draft, loading, onChange, onSave, onSend }: RequestEditorProps) {
+export function RequestEditor({
+  draft,
+  loading,
+  activeEnvironmentName,
+  activeEnvironmentVariables,
+  onChange,
+  onSave,
+  onSend,
+}: RequestEditorProps) {
   const [activeTab, setActiveTab] = useState<RequestTab>('Params');
   const [rawJsonViewMode, setRawJsonViewMode] = useState<'editor' | 'preview'>('editor');
   const [rawCollapsedPaths, setRawCollapsedPaths] = useState<Set<string>>(new Set());
   const [copyLabel, setCopyLabel] = useState('Copy');
   const [curlCopyLabel, setCurlCopyLabel] = useState('Copy cURL');
+  const [isUrlFocused, setIsUrlFocused] = useState(false);
+  const [urlInputScrollLeft, setUrlInputScrollLeft] = useState(0);
+  const urlInputRef = useRef<HTMLInputElement>(null);
   const bodyType = draft.bodyType ?? (draft.body ? 'raw' : 'none');
 
   const queryRows = useMemo(
@@ -203,6 +220,21 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
         binaryConfig,
       }),
     [binaryConfig, bodyType, draft, formDataRows, headerRows, queryRows, urlEncodedRows],
+  );
+  const environmentVariableMap = useMemo(
+    () =>
+      new Map(
+        activeEnvironmentVariables.map((variable) => [variable.key.trim(), variable.value ?? '']),
+      ),
+    [activeEnvironmentVariables],
+  );
+  const urlPreviewSegments = useMemo(
+    () => buildUrlPreviewSegments(draft.url, environmentVariableMap),
+    [draft.url, environmentVariableMap],
+  );
+  const hasUrlTemplateVariables = useMemo(
+    () => urlPreviewSegments.some((segment) => segment.kind === 'variable'),
+    [urlPreviewSegments],
   );
 
   useEffect(() => {
@@ -367,27 +399,74 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
     });
   }
 
+  function focusUrlInput() {
+    urlInputRef.current?.focus();
+  }
+
   return (
     <>
       <div className="shrink-0 flex items-center gap-0 px-4 py-2.5 border-b border-pm-border-s bg-pm-bg">
-        <select
-          className={`pm-input w-auto min-w-[100px] py-[7px] px-2.5 font-bold text-[13px] bg-pm-bg-t border-pm-border rounded-l rounded-r-none border-r-0 cursor-pointer ${
-            METHOD_SELECT_COLOR[draft.method] ?? ''
-          }`}
+        <MethodSelect
           value={draft.method}
-          onChange={(e) => updateDraft({ method: e.target.value as HttpMethod })}
-        >
-          {METHODS.map((method) => (
-            <option key={method} value={method}>{method}</option>
-          ))}
-        </select>
-        <input
-          className="pm-input flex-1 py-[7px] px-3 text-[15px] bg-pm-bg-input border-pm-border rounded-none border-l-0 border-r-0"
-          value={draft.url}
-          onChange={(e) => updateDraft({ url: e.target.value })}
-          onPaste={handleUrlPaste}
-          placeholder="Enter request URL"
+          onChange={(method) => updateDraft({ method })}
         />
+        <div
+          className="relative flex-1 border-y border-pm-border bg-pm-bg-input"
+          onMouseDown={() => focusUrlInput()}
+        >
+          <input
+            ref={urlInputRef}
+            className={`pm-input w-full py-[7px] px-3 text-[15px] rounded-none border-0 bg-transparent ${
+              hasUrlTemplateVariables && !isUrlFocused ? 'text-transparent caret-pm-text' : ''
+            }`}
+            value={draft.url}
+            onChange={(e) => updateDraft({ url: e.target.value })}
+            onPaste={handleUrlPaste}
+            onScroll={(event) => setUrlInputScrollLeft(event.currentTarget.scrollLeft)}
+            onFocus={() => setIsUrlFocused(true)}
+            onBlur={() => setIsUrlFocused(false)}
+            placeholder="Enter request URL"
+            spellCheck={false}
+          />
+          {hasUrlTemplateVariables && !isUrlFocused && (
+            <div className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-3 text-[15px]">
+              <div
+                className="whitespace-pre"
+                style={{ transform: `translateX(-${urlInputScrollLeft}px)` }}
+              >
+                {urlPreviewSegments.map((segment, index) =>
+                  segment.kind === 'text'
+                    ? (
+                      <span key={`url-overlay-${index}`} className="text-pm-text">
+                        {segment.value}
+                      </span>
+                    )
+                    : (
+                        <span
+                          key={`url-overlay-${index}`}
+                          className={`pointer-events-auto mx-[1px] rounded px-1 ${
+                            segment.resolvedValue !== null
+                              ? 'bg-[rgba(34,197,94,0.14)] text-[#86efac] ring-1 ring-inset ring-[rgba(34,197,94,0.36)]'
+                              : 'bg-[#4a1f24] text-[#ff808a]'
+                          }`}
+                          title={
+                            segment.resolvedValue !== null
+                            ? `${segment.key} = ${segment.resolvedValue}`
+                            : `${segment.key} is not defined in ${activeEnvironmentName ?? 'the active environment'}`
+                        }
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          focusUrlInput();
+                        }}
+                      >
+                        {segment.token}
+                      </span>
+                    ),
+                )}
+              </div>
+            </div>
+          )}
+        </div>
         <button
           className={`py-[7px] px-5 text-white font-bold text-[13px] rounded-r rounded-l-none border whitespace-nowrap transition-colors duration-150 ${
             loading
@@ -732,6 +811,136 @@ export function RequestEditor({ draft, loading, onChange, onSave, onSend }: Requ
         )}
       </div>
     </>
+  );
+}
+
+function buildUrlPreviewSegments(url: string, variableMap: Map<string, string>): UrlPreviewSegment[] {
+  const segments: UrlPreviewSegment[] = [];
+  const pattern = /\{\{\s*([^{}]+?)\s*\}\}/g;
+  let lastIndex = 0;
+  let match = pattern.exec(url);
+
+  while (match) {
+    if (match.index > lastIndex) {
+      segments.push({
+        kind: 'text',
+        value: url.slice(lastIndex, match.index),
+      });
+    }
+
+    const variableKey = match[1].trim();
+    const resolvedValue = variableMap.has(variableKey)
+      ? variableMap.get(variableKey) ?? ''
+      : null;
+
+    segments.push({
+      kind: 'variable',
+      token: match[0],
+      key: variableKey,
+      resolvedValue,
+    });
+
+    lastIndex = match.index + match[0].length;
+    match = pattern.exec(url);
+  }
+
+  if (lastIndex < url.length) {
+    segments.push({
+      kind: 'text',
+      value: url.slice(lastIndex),
+    });
+  }
+
+  return segments;
+}
+
+function MethodSelect({
+  value,
+  onChange,
+}: {
+  value: HttpMethod;
+  onChange(method: HttpMethod): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative shrink-0">
+      <button
+        type="button"
+        className={`flex min-w-[100px] items-center justify-between gap-2 rounded-l border border-r-0 border-pm-border bg-pm-bg-t px-2.5 py-[7px] text-[13px] font-bold transition-colors duration-150 hover:bg-pm-hover ${
+          METHOD_SELECT_COLOR[value] ?? ''
+        }`}
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span>{value}</span>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          className={`text-pm-text-s transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
+        >
+          <path
+            d="M6 9l6 6 6-6"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-30 mt-1 min-w-[124px] overflow-hidden rounded-md border border-pm-border bg-pm-bg-t shadow-[0_12px_28px_rgba(0,0,0,0.38)]">
+          <div role="listbox" aria-label="Request method" className="py-1">
+            {METHODS.map((method) => {
+              const selected = method === value;
+              return (
+                <button
+                  key={method}
+                  type="button"
+                  className={`flex w-full items-center px-3 py-2 text-left text-[13px] font-bold transition-colors duration-100 ${
+                    selected ? 'bg-pm-active' : 'hover:bg-pm-hover'
+                  } ${METHOD_SELECT_COLOR[method] ?? 'text-pm-text'}`}
+                  onClick={() => {
+                    onChange(method);
+                    setOpen(false);
+                  }}
+                  role="option"
+                  aria-selected={selected}
+                >
+                  {method}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

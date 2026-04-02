@@ -74,6 +74,7 @@ export function getAppBootstrap(): AppBootstrap {
   initializeDatabase();
   const workspaceId = ensureSeedData();
   const workspace = db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).get();
+  const settings = db.select().from(appSettings).where(eq(appSettings.id, DEFAULT_SETTINGS_ID)).get();
 
   if (!workspace) {
     throw new Error('Active workspace was not found after bootstrap.');
@@ -81,6 +82,7 @@ export function getAppBootstrap(): AppBootstrap {
 
   return {
     workspace,
+    activeEnvironmentId: settings?.activeEnvironmentId ?? null,
     collections: db.select().from(collections).where(eq(collections.workspaceId, workspaceId)).all(),
     requests: db.select().from(requests).where(eq(requests.workspaceId, workspaceId)).all(),
     environments: db.select().from(environments).where(eq(environments.workspaceId, workspaceId)).all(),

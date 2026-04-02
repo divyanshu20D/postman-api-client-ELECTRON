@@ -17,6 +17,7 @@ import type {
 
 export interface AppBootstrap {
   workspace: WorkspaceRecord;
+  activeEnvironmentId: string | null;
   collections: CollectionRecord[];
   requests: RequestRecord[];
   environments: EnvironmentRecord[];
@@ -134,6 +135,12 @@ export const saveVariableSchema = z.object({
 
 export type SaveVariableInput = z.infer<typeof saveVariableSchema>;
 
+export const setActiveEnvironmentSchema = z.object({
+  environmentId: z.string().uuid().nullable(),
+});
+
+export type SetActiveEnvironmentInput = z.infer<typeof setActiveEnvironmentSchema>;
+
 /* ===== Execute request ===== */
 
 export const executeRequestSchema = z.object({
@@ -150,6 +157,7 @@ export const executeRequestSchema = z.object({
   bodyMeta: z.string().nullable().optional(),
   authType: z.string().nullable().optional(),
   authConfig: z.string().nullable().optional(),
+  activeEnvironmentId: z.string().uuid().nullable().optional(),
 });
 
 export type ExecuteRequestInput = z.infer<typeof executeRequestSchema>;
@@ -200,6 +208,7 @@ export interface AppApi {
   createEnvironment(input: CreateEnvironmentInput): Promise<EnvironmentRecord>;
   updateEnvironment(input: UpdateEnvironmentInput): Promise<EnvironmentRecord>;
   deleteEnvironment(id: string): Promise<void>;
+  setActiveEnvironment(environmentId: string | null): Promise<void>;
 
   // Variables
   listVariables(environmentId: string): Promise<VariableRecord[]>;

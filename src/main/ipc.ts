@@ -14,6 +14,7 @@ import {
   listEnvironments,
   listVariables,
   saveVariable,
+  setActiveEnvironment,
   updateEnvironment,
 } from '../modules/environments/environment-service';
 import { clearHistory, listHistory } from '../modules/history/history-service';
@@ -29,6 +30,7 @@ import {
   exportCollectionSchema,
   pickFilesInputSchema,
   saveRequestDraftSchema,
+  setActiveEnvironmentSchema,
   saveVariableSchema,
   updateCollectionSchema,
   updateEnvironmentSchema,
@@ -147,6 +149,9 @@ export function registerAppIpc(ipcMain: IpcMain) {
   });
   ipcMain.handle('environments:delete', async (_event, id: string) => {
     return deleteEnvironment(id);
+  });
+  ipcMain.handle('environments:set-active', async (_event, input: unknown) => {
+    return setActiveEnvironment(setActiveEnvironmentSchema.parse(input));
   });
 
   // Variables

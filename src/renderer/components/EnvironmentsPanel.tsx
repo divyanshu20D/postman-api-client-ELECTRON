@@ -4,14 +4,32 @@ import type { EnvironmentRecord, VariableRecord } from '@shared/models';
 interface EnvironmentsPanelProps {
   workspaceId: string;
   environments: EnvironmentRecord[];
-  onEnvironmentsChanged(): void;
+  onEnvironmentCreated(environment: EnvironmentRecord): void;
+  onEnvironmentUpdated(environment: EnvironmentRecord): void;
+  onEnvironmentDeleted(environmentId: string): void;
+  onVariablesChanged(environmentId: string): void;
 }
 
-export function EnvironmentsPanel({ workspaceId, environments, onEnvironmentsChanged }: EnvironmentsPanelProps) {
+export function EnvironmentsPanel({
+  workspaceId,
+  environments,
+  onEnvironmentCreated,
+  onEnvironmentUpdated,
+  onEnvironmentDeleted,
+  onVariablesChanged,
+}: EnvironmentsPanelProps) {
   const [selectedEnvId, setSelectedEnvId] = useState<string | null>(environments[0]?.id ?? null);
   const [variables, setVariables] = useState<VariableRecord[]>([]);
   const [newEnvName, setNewEnvName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [editingEnvironmentId, setEditingEnvironmentId] = useState<string | null>(null);
+  const [environmentNameDraft, setEnvironmentNameDraft] = useState('');
+
+  useEffect(() => {
+    if (!environments.some((environment) => environment.id === selectedEnvId)) {
+      setSelectedEnvId(environments[0]?.id ?? null);
+    }
+  }, [environments, selectedEnvId]);
 
   // Load variables when selected environment changes
   useEffect(() => {
@@ -28,7 +46,7 @@ export function EnvironmentsPanel({ workspaceId, environments, onEnvironmentsCha
     setNewEnvName('');
     setIsCreating(false);
     setSelectedEnvId(env.id);
-    onEnvironmentsChanged();
+    onEnvironmentCreated(env);
   }
 
   async function handleDeleteEnv(id: string) {
@@ -36,7 +54,26 @@ export function EnvironmentsPanel({ workspaceId, environments, onEnvironmentsCha
     if (selectedEnvId === id) {
       setSelectedEnvId(null);
     }
-    onEnvironmentsChanged();
+    onEnvironmentDeleted(id);
+  }
+
+  async function handleRenameEnv(id: string) {
+    const trimmedName = environmentNameDraft.trim();
+    const environment = environments.find((item) => item.id === id);
+
+    setEditingEnvironmentId(null);
+
+    if (!environment || !trimmedName || trimmedName === environment.name) {
+      setEnvironmentNameDraft('');
+      return;
+    }
+
+    const updatedEnvironment = await window.appApi.updateEnvironment({
+      id,
+      name: trimmedName,
+    });
+    setEnvironmentNameDraft('');
+    onEnvironmentUpdated(updatedEnvironment);
   }
 
   async function handleSaveVariable(variable: Partial<VariableRecord> & { key: string }) {
@@ -51,12 +88,16 @@ export function EnvironmentsPanel({ workspaceId, environments, onEnvironmentsCha
     // Refresh variables
     const updated = await window.appApi.listVariables(selectedEnvId!);
     setVariables(updated);
+    onVariablesChanged(selectedEnvId!);
     return saved;
   }
 
   async function handleDeleteVariable(id: string) {
     await window.appApi.deleteVariable(id);
     setVariables((prev) => prev.filter((v) => v.id !== id));
+    if (selectedEnvId) {
+      onVariablesChanged(selectedEnvId);
+    }
   }
 
   const selectedEnv = environments.find((e) => e.id === selectedEnvId) ?? null;
@@ -122,7 +163,55 @@ export function EnvironmentsPanel({ workspaceId, environments, onEnvironmentsCha
                 <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
               </svg>
             </span>
-            <span className="flex-1 truncate text-pm-text">{env.name}</span>
+            {editingEnvironmentId === env.id ? (
+              <input
+                className="pm-input flex-1 min-w-0 bg-pm-bg border-pm-border-s text-xs"
+                value={environmentNameDraft}
+                onChange={(e) => setEnvironmentNameDraft(e.target.value)}
+                onBlur={() => void handleRenameEnv(env.id)}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.currentTarget.blur();
+                  }
+
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setEditingEnvironmentId(null);
+                    setEnvironmentNameDraft('');
+                  }
+                }}
+                autoFocus
+              />
+            ) : (
+              <span
+                className="flex-1 truncate text-pm-text"
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setEditingEnvironmentId(env.id);
+                  setEnvironmentNameDraft(env.name);
+                }}
+                title="Double-click to rename"
+              >
+                {env.name}
+              </span>
+            )}
+            <button
+              className="text-pm-text-t opacity-0 group-hover:opacity-100 hover:text-pm-text transition-all duration-150"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingEnvironmentId(env.id);
+                setEnvironmentNameDraft(env.name);
+              }}
+              type="button"
+              title="Rename environment"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 113 3L7 19l-4 1 1-4 12.5-12.5z" />
+              </svg>
+            </button>
             <button
               className="text-pm-text-t opacity-0 group-hover:opacity-100 hover:text-st-error transition-all duration-150"
               onClick={(e) => { e.stopPropagation(); void handleDeleteEnv(env.id); }}

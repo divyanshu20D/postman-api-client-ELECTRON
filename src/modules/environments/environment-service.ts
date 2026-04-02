@@ -2,7 +2,12 @@ import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { db } from '../../db/connection';
 import { appSettings, environments, variables } from '../../db/schema';
-import type { CreateEnvironmentInput, SaveVariableInput, UpdateEnvironmentInput } from '../../shared/ipc';
+import type {
+  CreateEnvironmentInput,
+  SaveVariableInput,
+  SetActiveEnvironmentInput,
+  UpdateEnvironmentInput,
+} from '../../shared/ipc';
 
 const DEFAULT_SETTINGS_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -54,6 +59,27 @@ export function deleteEnvironment(id: string) {
   // Delete all variables for this environment first
   db.delete(variables).where(eq(variables.environmentId, id)).run();
   db.delete(environments).where(eq(environments.id, id)).run();
+
+  const settings = db.select().from(appSettings).where(eq(appSettings.id, DEFAULT_SETTINGS_ID)).get();
+  if (settings?.activeEnvironmentId === id) {
+    db.update(appSettings)
+      .set({
+        activeEnvironmentId: null,
+        updatedAt: now(),
+      })
+      .where(eq(appSettings.id, DEFAULT_SETTINGS_ID))
+      .run();
+  }
+}
+
+export function setActiveEnvironment(input: SetActiveEnvironmentInput) {
+  db.update(appSettings)
+    .set({
+      activeEnvironmentId: input.environmentId,
+      updatedAt: now(),
+    })
+    .where(eq(appSettings.id, DEFAULT_SETTINGS_ID))
+    .run();
 }
 
 /* ===== Variables ===== */
