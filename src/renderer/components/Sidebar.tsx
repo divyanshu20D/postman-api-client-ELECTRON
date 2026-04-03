@@ -463,7 +463,7 @@ export function Sidebar({
   const workspaceMenuItems: ContextMenuItem[] = [
     { label: "New Collection", icon: <FolderIcon />, onClick: startCreateCollection },
     { label: "New Request", icon: <PlusIcon />, onClick: () => startCreateRequest(selectedCollectionId) },
-    { label: "Import Collection", icon: <ArrowIcon up />, onClick: onImportCollection },
+    { label: "Import Collection", icon: <ArrowIcon />, onClick: onImportCollection },
     { label: "Import cURL", icon: <CurlIcon />, onClick: () => onImportCurl(selectedCollectionId) },
   ];
 
@@ -479,7 +479,7 @@ export function Sidebar({
         { label: "Add Folder", icon: <FolderIcon />, onClick: () => startCreateFolder(collection.id) },
         { label: "Import cURL", icon: <CurlIcon />, onClick: () => onImportCurl(collection.id) },
         ...(collection.kind === "collection"
-          ? [{ label: "Export Collection", icon: <ArrowIcon />, onClick: () => onExportCollection(collection.id) }]
+          ? [{ label: "Export Collection", icon: <ArrowIcon up />, onClick: () => onExportCollection(collection.id) }]
           : []),
         { label: renameLabel, icon: <EditIcon />, onClick: () => startRenameCollection(collection) },
         { label: deleteLabel, icon: <TrashIcon />, onClick: () => onDeleteCollection(collection.id) },
@@ -743,7 +743,7 @@ export function Sidebar({
             type="button"
             title="Import ReqKit Collection"
           >
-            <ArrowIcon up />
+            <ArrowIcon />
           </button>
           <button
             className="w-[26px] h-[26px] flex items-center justify-center rounded text-pm-text-s hover:bg-pm-hover hover:text-pm-text transition-all duration-150 disabled:opacity-40 disabled:hover:bg-transparent"
@@ -756,7 +756,7 @@ export function Sidebar({
             title="Export Selected Collection"
             disabled={!canExportSelectedCollection}
           >
-            <ArrowIcon />
+            <ArrowIcon up />
           </button>
           <button
             className="w-[26px] h-[26px] flex items-center justify-center rounded text-pm-text-s hover:bg-pm-hover hover:text-pm-text transition-all duration-150"

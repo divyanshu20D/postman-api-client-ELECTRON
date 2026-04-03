@@ -60,7 +60,6 @@
     },
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false,
       "icon": "build/icon.ico"
     },
     "forceCodeSigning": false
