@@ -5,6 +5,7 @@ import type {
   ExecutionResult,
   HistoryEntryRecord,
   HttpMethod,
+  NetworkInspectorEntry,
   RequestBodyType,
   RequestRecord,
   VariableRecord,
@@ -12,6 +13,7 @@ import type {
 import { EnvironmentsPanel } from "./components/EnvironmentsPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { ImportCurlModal } from "./components/ImportCurlModal";
+import { NetworkInspectorPanel } from "./components/NetworkInspectorPanel";
 import { RequestEditor } from "./components/RequestEditor";
 import { ResponsePanel } from "./components/ResponsePanel";
 import { Sidebar } from "./components/Sidebar";
@@ -19,7 +21,7 @@ import reqKitLogo from "./assets/reqkit-logo.svg";
 import { parseCurl } from "./utils/curl-parser";
 import { METHOD_COLOR } from "./utils/method-colors";
 
-type RailTab = "collections" | "environments" | "history";
+type RailTab = "collections" | "environments" | "history" | "inspector";
 
 interface RequestTab {
   tabId: string;
@@ -885,6 +887,26 @@ export function App() {
     }
   }
 
+  function handleOpenCapturedRequest(entry: NetworkInspectorEntry) {
+    if (!bootstrap) {
+      return;
+    }
+
+    const placement = resolveRequestPlacement(bootstrap.collections, selectedCollectionId);
+    const tab = createTab(
+      capturedEntryToDraft(
+        entry,
+        bootstrap.workspace.id,
+        placement.collectionId,
+        placement.folderId,
+      ),
+    );
+
+    addTab(tab);
+    setActiveRail("collections");
+    setStatus(`Loaded ${entry.method} ${extractNameFromUrl(entry.url)} into the editor`);
+  }
+
   if (!bootstrap || tabs.length === 0 || !draft) {
     return (
       <div className="h-screen grid place-items-center bg-pm-bg text-pm-text-s">
@@ -1037,6 +1059,28 @@ export function App() {
               <polyline points="12 6 12 12 16 14" />
             </svg>
           </RailButton>
+          <RailButton
+            title="Inspector"
+            active={activeRail === "inspector"}
+            onClick={() => setActiveRail("inspector")}
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 7h18" />
+              <path d="M6 7V5a2 2 0 012-2h8a2 2 0 012 2v2" />
+              <rect x="3" y="7" width="18" height="13" rx="2" />
+              <path d="M8 12h8" />
+              <path d="M8 16h5" />
+            </svg>
+          </RailButton>
         </aside>
 
         {activeRail === "collections" && (
@@ -1141,8 +1185,13 @@ export function App() {
             onClearHistory={() => void handleClearHistory()}
           />
         )}
+        <div className={`col-span-2 flex min-h-0 ${activeRail === "inspector" ? "" : "hidden"}`}>
+          <NetworkInspectorPanel
+            onOpenCapturedRequest={handleOpenCapturedRequest}
+          />
+        </div>
 
-        <main className="flex flex-col min-w-0 min-h-0 bg-pm-bg overflow-hidden">
+        <main className={`flex flex-col min-w-0 min-h-0 bg-pm-bg overflow-hidden ${activeRail === "inspector" ? "hidden" : ""}`}>
           <div className="flex items-stretch bg-pm-bg-s border-b border-pm-border-s min-h-[36px] overflow-x-auto [&::-webkit-scrollbar]:h-0">
             {tabs.map((tab) => {
               const isActive = tab.tabId === activeTabId;
@@ -1272,6 +1321,57 @@ function extractNameFromUrl(url: string): string {
   } catch {
     return "Imported Request";
   }
+}
+
+function capturedEntryToDraft(
+  entry: NetworkInspectorEntry,
+  workspaceId: string,
+  collectionId: string | null,
+  folderId: string | null,
+): SaveRequestDraftInput {
+  let url = entry.url;
+  let queryParams = "[]";
+
+  try {
+    const parsedUrl = new URL(entry.url);
+    queryParams = JSON.stringify(
+      Array.from(parsedUrl.searchParams.entries()).map(([key, value]) => ({
+        key,
+        value,
+        enabled: true,
+      })),
+      null,
+      2,
+    );
+    parsedUrl.search = "";
+    url = parsedUrl.toString();
+  } catch {
+    // Keep the original URL when parsing fails.
+  }
+
+  return {
+    workspaceId,
+    collectionId,
+    folderId,
+    name: extractNameFromUrl(entry.url),
+    method: (entry.method.toUpperCase() || "GET") as HttpMethod,
+    url,
+    queryParams,
+    headers: JSON.stringify(
+      entry.requestHeaders.map((header) => ({
+        key: header.key,
+        value: header.value,
+        enabled: true,
+      })),
+      null,
+      2,
+    ),
+    bodyType: entry.requestBody ? "raw" : "none",
+    body: entry.requestBody,
+    bodyMeta: null,
+    authType: null,
+    authConfig: null,
+  };
 }
 
 function requestToDraft(request: RequestRecord): SaveRequestDraftInput {

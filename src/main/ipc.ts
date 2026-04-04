@@ -10,6 +10,7 @@ import {
   logRendererWarn,
 } from './logger';
 import { getAppBootstrap } from '../modules/collections/bootstrap-service';
+import { networkInspectorService } from '../modules/inspector/network-inspector-service';
 import { createCollection, deleteCollection, listCollections, updateCollection } from '../modules/collections/collection-service';
 import {
   exportReqKitCollectionToFile,
@@ -32,6 +33,7 @@ import {
   cancelRequestExecutionSchema,
   createCollectionSchema,
   createEnvironmentSchema,
+  attachNetworkInspectorSchema,
   deleteCollectionSchema,
   deleteRequestSchema,
   executeRequestSchema,
@@ -57,6 +59,19 @@ export function registerAppIpc(ipcMain: IpcMain) {
     mainLogPath: getMainLogPath(),
     rendererLogPath: getRendererLogPath(),
   }));
+  ipcMain.handle('inspector:attach', async (event, input: unknown) => {
+    const payload = attachNetworkInspectorSchema.parse(input);
+    await networkInspectorService.attach(event.sender, payload.webContentsId);
+  });
+  ipcMain.handle('inspector:detach', async () => {
+    await networkInspectorService.detach();
+  });
+  ipcMain.handle('inspector:clear', async () => {
+    networkInspectorService.clear();
+  });
+  ipcMain.handle('inspector:list', async () => {
+    return networkInspectorService.listEntries();
+  });
 
   // Collections
   ipcMain.handle('collections:list', async () => listCollections());

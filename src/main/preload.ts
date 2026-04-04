@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { IpcRendererEvent } from 'electron';
 import type {
   AppApi,
   AppBootstrap,
+  AttachNetworkInspectorInput,
   CancelRequestExecutionInput,
   CreateCollectionInput,
   CreateEnvironmentInput,
@@ -16,10 +18,29 @@ import type {
   UpdateCollectionInput,
   UpdateEnvironmentInput,
 } from '../shared/ipc';
+import type { NetworkInspectorEvent } from '../shared/models';
 
 const api: AppApi = {
   getBootstrap: () => ipcRenderer.invoke('app:get-bootstrap') as Promise<AppBootstrap>,
   getLogPaths: () => ipcRenderer.invoke('app:get-log-paths') as Promise<LogPaths>,
+  attachNetworkInspector: (input: AttachNetworkInspectorInput) =>
+    ipcRenderer.invoke('inspector:attach', input) as ReturnType<AppApi['attachNetworkInspector']>,
+  detachNetworkInspector: () =>
+    ipcRenderer.invoke('inspector:detach') as ReturnType<AppApi['detachNetworkInspector']>,
+  clearNetworkInspector: () =>
+    ipcRenderer.invoke('inspector:clear') as ReturnType<AppApi['clearNetworkInspector']>,
+  getNetworkInspectorEntries: () =>
+    ipcRenderer.invoke('inspector:list') as ReturnType<AppApi['getNetworkInspectorEntries']>,
+  onNetworkInspectorEvent: (listener: (event: NetworkInspectorEvent) => void) => {
+    const wrappedListener = (_event: IpcRendererEvent, payload: NetworkInspectorEvent) => {
+      listener(payload);
+    };
+
+    ipcRenderer.on('inspector:event', wrappedListener);
+    return () => {
+      ipcRenderer.removeListener('inspector:event', wrappedListener);
+    };
+  },
   listCollections: () => ipcRenderer.invoke('collections:list') as ReturnType<AppApi['listCollections']>,
   createCollection: (input: CreateCollectionInput) =>
     ipcRenderer.invoke('collections:create', input) as ReturnType<AppApi['createCollection']>,

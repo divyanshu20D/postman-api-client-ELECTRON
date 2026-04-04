@@ -101,6 +101,53 @@ export interface ExecutionResult {
   sizeBytes: number;
 }
 
+export interface HeaderRecord {
+  key: string;
+  value: string;
+}
+
+export type InspectorResourceType =
+  | 'xhr'
+  | 'fetch'
+  | 'document'
+  | 'stylesheet'
+  | 'script'
+  | 'image'
+  | 'media'
+  | 'font'
+  | 'websocket'
+  | 'other';
+
+export type InspectorRequestState = 'pending' | 'success' | 'failed';
+
+export interface NetworkInspectorEntry {
+  id: string;
+  url: string;
+  method: string;
+  resourceType: InspectorResourceType;
+  state: InspectorRequestState;
+  statusCode: number | null;
+  statusText: string | null;
+  requestHeaders: HeaderRecord[];
+  responseHeaders: HeaderRecord[];
+  requestBody: string | null;
+  responseBody: string | null;
+  errorText: string | null;
+  startedAt: string;
+  durationMs: number | null;
+  responseSizeBytes: number | null;
+  mimeType: string | null;
+}
+
+export type NetworkInspectorEvent =
+  | {
+      type: 'reset';
+    }
+  | {
+      type: 'upsert';
+      entry: NetworkInspectorEntry;
+    };
+
 export interface VariableRecord {
   id: string;
   environmentId: string | null;

@@ -32,6 +32,7 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
     },
   });
 
@@ -104,6 +105,14 @@ app.whenReady().then(() => {
 });
 
 app.on('web-contents-created', (_event, contents) => {
+  contents.on('will-attach-webview', (_attachEvent, webPreferences) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+  });
+
   contents.on('preload-error', (_contentsEvent, preloadPath, error) => {
     logMainError('Preload script failed', {
       preloadPath,

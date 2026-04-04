@@ -7,7 +7,9 @@ import type {
   FormDataRow,
   HistoryEntryRecord,
   HttpMethod,
+  NetworkInspectorEntry,
   KeyValueRow,
+  NetworkInspectorEvent,
   PickedFile,
   RequestBodyType,
   RequestRecord,
@@ -56,6 +58,10 @@ export interface LogPaths {
   logsDirectory: string;
   mainLogPath: string;
   rendererLogPath: string;
+}
+
+export interface AttachNetworkInspectorInput {
+  webContentsId: number;
 }
 
 const requestBodyTypeSchema = z.enum(['none', 'raw', 'form-data', 'x-www-form-urlencoded', 'binary']);
@@ -155,6 +161,12 @@ export const rendererLogSchema = z.object({
 
 export type RendererLogInput = z.infer<typeof rendererLogSchema>;
 
+export const attachNetworkInspectorSchema = z.object({
+  webContentsId: z.number().int().positive(),
+});
+
+export type AttachNetworkInspectorSchemaInput = z.infer<typeof attachNetworkInspectorSchema>;
+
 /* ===== Execute request ===== */
 
 export const executeRequestSchema = z.object({
@@ -199,6 +211,11 @@ export const deleteHistoryEntrySchema = z.object({
 export interface AppApi {
   getBootstrap(): Promise<AppBootstrap>;
   getLogPaths(): Promise<LogPaths>;
+  attachNetworkInspector(input: AttachNetworkInspectorInput): Promise<void>;
+  detachNetworkInspector(): Promise<void>;
+  clearNetworkInspector(): Promise<void>;
+  getNetworkInspectorEntries(): Promise<NetworkInspectorEntry[]>;
+  onNetworkInspectorEvent(listener: (event: NetworkInspectorEvent) => void): () => void;
   listCollections(): Promise<CollectionRecord[]>;
   createCollection(input: CreateCollectionInput): Promise<CollectionRecord>;
   updateCollection(input: UpdateCollectionInput): Promise<CollectionRecord>;
