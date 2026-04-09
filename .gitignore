@@ -5,6 +5,15 @@ dist-electron/
 release/
 out/
 
+# Generated TypeScript artifacts
+vite.config.js
+vite.config.d.ts
+drizzle.config.js
+drizzle.config.d.ts
+src/**/*.js
+src/**/*.d.ts
+!src/shared/env.d.ts
+
 coverage/
 .vite/
 

@@ -139,7 +139,23 @@ function isValidBinaryJson(value: string | null | undefined) {
 }
 
 function formatFileLabel(file: PickedFile | BinaryBodyConfig | FormDataRow) {
-  return file.fileName || file.path || file.filePath || 'Choose file';
+  if ('fileName' in file && file.fileName) {
+    return file.fileName;
+  }
+
+  if ('name' in file && file.name) {
+    return file.name;
+  }
+
+  if ('path' in file && file.path) {
+    return file.path;
+  }
+
+  if ('filePath' in file && file.filePath) {
+    return file.filePath;
+  }
+
+  return 'Choose file';
 }
 
 function extractNameFromUrl(url: string): string {
